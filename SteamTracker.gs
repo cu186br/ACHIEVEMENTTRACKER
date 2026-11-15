@@ -145,7 +145,6 @@ function buildMenu_() {
     .addSeparator()
     .addItem('Add BACKLOG STATUS column', 'addPlayStatusColumn')
     .addItem('Add DATE COMPLETED column', 'addDateCompletedColumn')
-    .addItem('Add HACK column (RetroAchievements)', 'addHackColumn')
     .addSeparator()
     .addItem('Add totals row under the header', 'addTopTotals')
     .addItem('Upgrade RetroAchievements columns (hardcore)', 'upgradeRetroLayout');
@@ -958,7 +957,7 @@ function sendTestCompletion() {
         const entries = raFetchProgress_();
         const byTitle = {};
         entries.forEach(e => { e._key = normRa_(e.Title); (byTitle[e._key] = byTitle[e._key] || []).push(e); });
-        const m = raMatch_(ra.title, ra.consoleName, byTitle, entries, isHackTitle_(ra.title));
+        const m = raMatch_(ra.title, ra.consoleName, byTitle, entries, tagOf_(ra.title));
         if (m.entry) ra.cover = raImage_(m.entry.ImageIcon);
       } catch (e) { /* post without an icon */ }
       ra.title += ra.consoleName ? ' [' + ra.consoleName + ']' : '';
@@ -1387,7 +1386,6 @@ function setupLayout_(sheet, layout) {
   sheet.getRange(tr, 1, 1, n).setFontWeight('bold');
 
   sheet.setColumnWidth(at('GAME LIST'), 260);
-  if (has('HACK')) { sheet.setColumnWidth(at('HACK'), 60); sheet.getRange(2, at('HACK'), nrows, 1).insertCheckboxes(); }
 }
 
 // ---------- shared sheet helpers ----------
@@ -1644,33 +1642,6 @@ function settingGameRows() {
   alert_('New blank sheets will get ' + n + ' game rows.');
 }
 
-// ---------- RetroAchievements: HACK column ----------
-// A checkbox column between BACKLOG STATUS and GAME LIST. The script ticks it when a game is a hack (its RetroAchievements
-// title starts with ~Hack~). Tick it yourself on a game you haven't played to make the script search the hacks for it.
-
-function addHackColumn() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(cfg_().raSheetName);
-  if (!sheet) { alert_('There is no "' + cfg_().raSheetName + '" tab yet.'); return; }
-  const r = withLock_(() => addHackColumn_(sheet));
-  if (r) { alert_(r); updateSteamSheet(); }
-}
-
-function addHackColumn_(sheet) {
-  const headers = headersOf_(sheet);
-  const nameIdx = headers.findIndex(h => NAME_HEADERS.indexOf(h) !== -1);
-  if (nameIdx === -1) return 'Could not find a GAME LIST column in row 1 of "' + sheet.getName() + '".';
-  if (['hack', 'is hack', 'romhack'].some(h => headers.indexOf(h) !== -1)) { alert_('"' + sheet.getName() + '" already has a HACK column.'); return null; }
-  sheet.insertColumnBefore(nameIdx + 1);                          // directly left of GAME LIST (so right of BACKLOG STATUS)
-  sheet.getRange(1, nameIdx + 2).copyTo(sheet.getRange(1, nameIdx + 1), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
-  sheet.getRange(1, nameIdx + 1).setValue('HACK');
-  sheet.setColumnWidth(nameIdx + 1, 60);
-  const top = topRow_(sheet);
-  const tr = totalsRowOf_(sheet, headersOf_(sheet));
-  const last = tr ? tr - 1 : Math.max(sheet.getLastRow(), top);
-  sheet.getRange(top, nameIdx + 1, last - top + 1, 1).insertCheckboxes().setHorizontalAlignment('center');
-  return 'Added a HACK column to "' + sheet.getName() + '", left of GAME LIST. It is ticked automatically for ROM hacks. Tick it yourself on a hack you haven\'t played to have the script search the hack list for it.';
-}
-
 // ---------- RetroAchievements: split hardcore into its own columns ----------
 // Older RetroAchievements tabs have one HARDCORE ACHIES column. This replaces it with a full hardcore set after COMPLETED:
 // COLLECTED HC ACHIES, TOTAL HC ACHIES, HC AMOUNT DONE, HC PROGRESS, HC COMPLETED (with totals), and keeps your hardcore numbers.
@@ -1823,6 +1794,7 @@ function appendGameRows_(sheet, headers, nameIdx, entries) {
     });
     a = b + 1;
   }
+  if (list.length) alignColumns_(sheet, headers, Math.max(sheet.getLastRow() - top + 1, 1), true);   // new rows get the column alignment
   return list.length;
 }
 
@@ -1960,7 +1932,7 @@ function applyPlayStatus_(sheet, headers, nameIdx, numRows) {
   if (si === -1 || numRows < 1) return;
   const c = cfg_();
   const top = topRow_(sheet);
-  // A new column can inherit the HACK column's checkboxes, which reject text such as ACTIVE: remove them from this column.
+  // A new column can inherit checkboxes from a neighbouring column (an old HACK column), which reject text such as ACTIVE: remove them.
   if (isCheckbox_(sheet.getRange(top, si + 1).getDataValidation())) {
     sheet.getRange(top, si + 1, Math.max(sheet.getMaxRows() - top + 1, 1), 1).clearDataValidations();
   }
@@ -2119,7 +2091,7 @@ function addPlayStatusColumn() {
   if (nameIdx === -1) { alert_('Could not find a GAME LIST column in row 1 of "' + sheet.getName() + '". Nothing was changed.'); return; }
   const had = headers.findIndex(h => PLAY_STATUS_HEADERS.indexOf(h) !== -1) !== -1;
   if (!had) {
-    if (nameIdx > 0 && headers[nameIdx - 1] === 'hack') nameIdx--;                // BACKLOG STATUS, then HACK, then GAME LIST
+    if (nameIdx > 0 && headers[nameIdx - 1] === 'hack') nameIdx--;                // an old HACK column stays right of BACKLOG STATUS
     sheet.insertColumnBefore(nameIdx + 1);
     sheet.getRange(1, nameIdx + 2).copyTo(sheet.getRange(1, nameIdx + 1), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
     sheet.getRange(1, nameIdx + 1).setValue('BACKLOG STATUS');
@@ -2136,7 +2108,7 @@ function addPlayStatusColumn() {
 // ---------- RetroAchievements ----------
 
 const RA_BASE = 'https://retroachievements.org/API/';
-const RA_LAYOUT = ['HACK', 'GAME LIST', 'CONSOLE', 'GENRE', 'COLLECTED ACHIES', 'TOTAL ACHIES', 'AMOUNT DONE', 'PROGRESS', 'COMPLETED',
+const RA_LAYOUT = ['GAME LIST', 'CONSOLE', 'GENRE', 'COLLECTED ACHIES', 'TOTAL ACHIES', 'AMOUNT DONE', 'PROGRESS', 'COMPLETED',
   'COLLECTED HC ACHIES', 'TOTAL HC ACHIES', 'HC AMOUNT DONE', 'HC PROGRESS', 'HC COMPLETED',
   'LAST PLAYED', 'DATE COMPLETED', 'LAST UPDATED'];
 const RA_NOTE = 'RetroAchievements: ';
@@ -2250,7 +2222,7 @@ function raImportWantToPlay_(sheet) {
   const headers = headersOf_(sheet);
   const nameIdx = headers.findIndex(h => NAME_HEADERS.indexOf(h) !== -1);
   if (nameIdx === -1) return { added: 0, msg: 'The tab needs a GAME LIST column in row 1.' };
-  const consoleIdx = headers.indexOf('console'), idIdx = headers.indexOf('game id'), hackIdx = headers.indexOf('hack');
+  const consoleIdx = headers.indexOf('console'), idIdx = headers.indexOf('game id');
   const list = raFetchWantToPlay_();
 
   // What is already on the tab: titles (with their console) and game IDs.
@@ -2268,12 +2240,11 @@ function raImportWantToPlay_(sheet) {
     if (!g || !g.Title) return;
     if (g.AchievementsPublished !== undefined && !(Number(g.AchievementsPublished) > 0)) { noAch++; return; }   // nothing to track
     const k = normRa_(g.Title), con = normRa_(g.ConsoleName || '');
-    if (ids[g.ID] || (titles[k] && titles[k].some(c => c === '' || c === con))) { already++; return; }
+    if (ids[g.ID] || (titles[k] && titles[k].some(c => c === '' || c === con || con.indexOf(c) !== -1 || c.indexOf(con) !== -1))) { already++; return; }
     const e = {};
     e[nameIdx] = g.Title;
     if (consoleIdx >= 0) e[consoleIdx] = g.ConsoleName || '';
     if (idIdx >= 0) e[idIdx] = g.ID;
-    if (hackIdx >= 0 && isHackTitle_(g.Title)) e[hackIdx] = true;
     entries.push(e);
   });
   const added = appendGameRows_(sheet, headers, nameIdx, entries);
@@ -2282,28 +2253,46 @@ function raImportWantToPlay_(sheet) {
 }
 
 // Finds a sheet row's game in your RetroAchievements list: exact title, then a close title; CONSOLE narrows it down.
-// RetroAchievements tags hacks with a "~Hack~" prefix in the title. A row counts as a hack when its title has the tag or
-// its HACK box is ticked; it is then matched against the hack titles with the tags removed.
-function isHackTitle_(t) { return /~\s*hack\s*~/i.test(String(t)); }
+// RetroAchievements labels special releases in the title: a "~Hack~" / "~Homebrew~" / "~Demo~" prefix, and a
+// "[Subset - Name]" suffix for subsets. A title with a prefix tag is matched only against titles with the same tag
+// (tags ignored); a subset is matched with or without the word "Subset" and the brackets.
+function tagOf_(t) { const m = /^\s*~\s*([^~]+?)\s*~/.exec(String(t)); return m ? m[1].toLowerCase() : ''; }
 function stripTags_(t) { return String(t).replace(/~[^~]*~\s*/g, '').trim(); }
+function isSubset_(t) { return /\[\s*subset/i.test(String(t)); }
+function subKey_(t) { return normRa_(String(t).replace(/\bsubset\b/ig, '')); }
+function baseKey_(t) { return normRa_(String(t).replace(/\[[^\]]*\]/g, '')); }
 
-function raMatch_(title, consoleTxt, byTitle, entries, hack) {
+// True when the typed title differs from the entry only by a bracket note such as "[Rev 1]".
+function extraIsOnlyTag_(typed, entryTitle) {
+  const rest = String(typed).toLowerCase().replace(/\[[^\]]*\]/g, '');
+  return normRa_(rest) === normRa_(String(entryTitle).replace(/\[[^\]]*\]/g, ''));
+}
+
+function raMatch_(title, consoleTxt, byTitle, entries, tag) {
   const key = normRa_(title);
   let cands = byTitle[key] || [];
   let note = '';
-  if (hack) {
+  if (tag) {
     const hk = normRa_(stripTags_(title));
-    const hacks = entries.filter(e => isHackTitle_(e.Title));
+    const same = entries.filter(e => tagOf_(e.Title) === tag);
     const hk2 = e => normRa_(stripTags_(e.Title));
-    let hc = hacks.filter(e => hk2(e) === hk);
+    let hc = same.filter(e => hk2(e) === hk);
     if (!hc.length && hk.length >= 5) {
-      hc = hacks.filter(e => hk2(e).indexOf(hk) !== -1 || (hk2(e).length >= 5 && hk.indexOf(hk2(e)) !== -1));
+      hc = same.filter(e => hk2(e).indexOf(hk) !== -1 || (hk2(e).length >= 5 && hk.indexOf(hk2(e)) !== -1));
       if (hc.length) note = 'matched "' + hc[0].Title + '", please verify';
     }
     if (hc.length) cands = hc;
   }
+  if (!cands.length) {                                   // a subset typed without the "[Subset - ...]" wording
+    const sk = subKey_(title);
+    const sc = entries.filter(e => isSubset_(e.Title) && subKey_(e.Title) === sk);
+    if (sc.length) cands = sc;
+  }
   if (!cands.length && key.length >= 5) {
-    cands = entries.filter(e => e._key.indexOf(key) !== -1 || (e._key.length >= 5 && key.indexOf(e._key) !== -1));
+    // A typed title that is the base title plus extra words (or brackets) is probably a subset, not the base game.
+    const looksSub = /subset|\[/i.test(String(title));
+    cands = entries.filter(e => (e._key.indexOf(key) !== -1 && !(looksSub && !isSubset_(e.Title))) ||
+      (!looksSub && e._key.length >= 5 && key.indexOf(e._key) !== -1 && isSubset_(e.Title) === false && extraIsOnlyTag_(title, e.Title)));
     if (cands.length) note = 'matched "' + cands[0].Title + '", please verify';
   }
   if (cands.length > 1 && consoleTxt) {
@@ -2396,10 +2385,11 @@ function raConsoleMatches_(text, consoles) {
 }
 
 // Looks up a game that isn't in your history: { found: {...} } or { why: 'text' }. `st` is shared by all rows in one update.
-function raCatalogLookup_(title, consoleTxt, st, hack) {
-  hack = !!hack || isHackTitle_(title);
-  const q = normRa_(hack ? stripTags_(title) : title);
-  const key = q + '|' + normRa_(consoleTxt) + (hack ? '|hack' : '');
+function raCatalogLookup_(title, consoleTxt, st, tag) {
+  tag = tag || tagOf_(title);
+  const q = normRa_(tag ? stripTags_(title) : title);
+  const q2 = subKey_(tag ? stripTags_(title) : title);
+  const key = q + '|' + normRa_(consoleTxt) + (tag ? '|' + tag : '');
   const old = st.found[key];
   if (old && Date.now() - old.t < RA_FOUND_DAYS * 864e5) return { found: old, note: old.note || '' };
   const scanned = st.scanned[key];
@@ -2418,19 +2408,21 @@ function raCatalogLookup_(title, consoleTxt, st, hack) {
     }
   }
 
-  const exact = [], loose = [];
+  const exact = [], loose = [], subs = [];
   let complete = true;
   for (let n = 0; n < consoles.length; n++) {
     const c = consoles[n];
     const list = raConsoleGames_(c[0], st);
     if (list === null) { complete = false; break; }
     list.forEach(g => {
-      if (hack) { if (!isHackTitle_(g[1])) return; }                              // a hack row only looks at hacks
-      else if (/^~|\[subset/i.test(g[1]) && q.indexOf('subset') === -1) return;  // otherwise hacks, homebrew and subsets are skipped
-      const k = normRa_(hack ? stripTags_(g[1]) : g[1]);
+      if (tag) { if (tagOf_(g[1]) !== tag) return; }                              // a tagged row only looks at titles with the same tag
+      else if (g[1].charAt(0) === '~') return;                                    // otherwise hacks, homebrew and demos are skipped
+      const sub = isSubset_(g[1]);
+      const k = normRa_(tag ? stripTags_(g[1]) : g[1]);
       const hit = { id: g[0], title: g[1], total: g[2], cid: c[0], console: c[1] };
-      if (k === q) exact.push(hit);
-      else if (q.length >= 6 && (k.indexOf(q) === 0 || q.indexOf(k) === 0)) loose.push(hit);
+      if (k === q || (sub && subKey_(tag ? stripTags_(g[1]) : g[1]) === q2)) exact.push(hit);
+      else if ((!sub || q.indexOf('subset') !== -1) && q.length >= 6 && (k.indexOf(q) === 0 || q.indexOf(k) === 0)) loose.push(hit);
+      if (sub && baseKey_(tag ? stripTags_(g[1]) : g[1]) === q) subs.push(hit);   // subsets of the game that was typed
     });
   }
 
@@ -2459,7 +2451,9 @@ function raCatalogLookup_(title, consoleTxt, st, hack) {
   }
   if (!complete) return old ? { found: old, note: old.note || '' } : { why: 'still searching the RetroAchievements catalog. It continues on the next updates.' };
   if (old) return { found: old, note: old.note || '' };
-  const why = 'not found on RetroAchievements (it may have no achievements there). Check the spelling or fill in CONSOLE.';
+  const subTitles = subs.map(h => h.title).filter((v, i, a) => a.indexOf(v) === i);
+  const why = 'not found on RetroAchievements (it may have no achievements there). Check the spelling or fill in CONSOLE.' +
+    (subTitles.length ? ' It has subsets: ' + subTitles.slice(0, 4).join('; ') + '. Type the full title to track one.' : '');
   st.scanned[key] = { t: Date.now(), why: why }; st.dirty = true;
   return { why: why };
 }
@@ -2543,8 +2537,7 @@ function updateRetro_(force) {
   if (nameIdx === -1) throw new Error('Could not find a "GAME LIST" column in row 1 of the "' + c.raSheetName + '" tab.');
   const col = { unlocked: H('collected achies'), total: H('total achies'), hardcore: H('collected hc achies') >= 0 ? H('collected hc achies') : H('hardcore achies'), totalHc: H('total hc achies'), console: H('console'),
     genre: c.genreColumn ? H('genre') : -1, lastPlayed: H('last played'), completed: H('date completed'),
-    updated: H('last updated'), appid: H('game id'), hack: ['hack', 'is hack', 'romhack'].map(h => H(h)).filter(i => i >= 0)[0] };
-  if (col.hack === undefined) col.hack = -1;
+    updated: H('last updated'), appid: H('game id') };
   if (col.unlocked === -1 || col.total === -1) {
     throw new Error('The "' + c.raSheetName + '" tab needs COLLECTED ACHIES and TOTAL ACHIES columns.');
   }
@@ -2582,14 +2575,14 @@ function updateRetro_(force) {
     let entry = typedId ? (byId[typedId] || null) : null;
     let id = typedId || 0;
     let note = '';
-    const hack = isHackTitle_(title) || (col.hack >= 0 && /^(true|1|yes|x|✓)$/i.test(String(cell(row, col.hack)).trim()));
+    const tag = tagOf_(title);
     if (!entry && !(keepRules.appid && typedId)) {
-      const m = raMatch_(title, consoleTxt, byTitle, entries, hack);
+      const m = raMatch_(title, consoleTxt, byTitle, entries, tag);
       if (m.entry) { entry = m.entry; id = entry.GameID; }
       note = m.note;
     }
     if (!entry && !id) {
-      const f = raCatalogLookup_(title, consoleTxt, search, hack);
+      const f = raCatalogLookup_(title, consoleTxt, search, tag);
       if (f.found) { items.push({ i: i, title: title, id: f.found.id, entry: null, found: f.found, note: f.note }); return; }
       items.push({ i: i, title: title, missing: true, why: f.why });
       return;
@@ -2626,7 +2619,7 @@ function updateRetro_(force) {
 
   // --- Fill the output columns ---
   const { out, orig, put } = outputSet_(data, col,
-    ['appid', 'console', 'genre', 'unlocked', 'hardcore', 'total', 'totalHc', 'lastPlayed', 'completed', 'updated', 'hack'], cell,
+    ['appid', 'console', 'genre', 'unlocked', 'hardcore', 'total', 'totalHc', 'lastPlayed', 'completed', 'updated'], cell,
     Object.assign({}, keepRules, { totalHc: keepRules.total }));
   const nameRange = sheet.getRange(top, nameIdx + 1, numRows, 1);
   const notes = nameRange.getNotes();
@@ -2677,7 +2670,6 @@ function updateRetro_(force) {
 
     put('appid', i, it.id);
     put('console', i, consoleName);
-    if ((it.entry && isHackTitle_(it.entry.Title)) || (it.found && isHackTitle_(it.found.title))) put('hack', i, true);   // tick the HACK box
     if (genreCache['ra' + it.id]) put('genre', i, genreCache['ra' + it.id]);
     if (lastDate) put('lastPlayed', i, lastDate);
 
@@ -2754,9 +2746,8 @@ function diagnoseRetro_(sheet) {
   const entries = raFetchProgress_();
   const byTitle = {};
   entries.forEach(e => { e._key = normRa_(e.Title); (byTitle[e._key] = byTitle[e._key] || []).push(e); });
-  const hi = ['hack', 'is hack', 'romhack'].map(h => headers.indexOf(h)).filter(i => i >= 0)[0];
-  const hack = isHackTitle_(title) || (hi !== undefined && sheet.getRange(row, hi + 1).getValue() === true);
-  const m = raMatch_(title, consoleTxt, byTitle, entries, hack);
+  const tag = tagOf_(title);
+  const m = raMatch_(title, consoleTxt, byTitle, entries, tag);
   const lines = ['Game: ' + title + (consoleTxt ? ' (' + consoleTxt + ')' : ''),
                  'Your RetroAchievements history has ' + entries.length + ' games.'];
   if (m.entry) {
@@ -2765,7 +2756,7 @@ function diagnoseRetro_(sheet) {
     lines.push(e.NumAwarded + ' of ' + e.MaxPossible + ' achievements (' + e.NumAwardedHardcore + ' in hardcore)');
     if (m.note) lines.push('Note: ' + m.note);
   } else {
-    const f = raCatalogLookup_(title, consoleTxt, raSearchState_(), hack);
+    const f = raCatalogLookup_(title, consoleTxt, raSearchState_(), tag);
     if (f.found) {
       lines.push('Not in your history (not played yet), but found in the game list: ' + f.found.title + ' [' + f.found.console + '] (game ' + f.found.id + ')');
       lines.push(f.found.total + ' achievements; collected and hardcore are shown as 0.');
@@ -2799,7 +2790,7 @@ function outputSet_(data, col, keys, cell, keepRules) {
 
 // Text alignment for the number and date columns (header names, so it works on both tabs).
 const ALIGN_CENTER = ['collected achies', 'hardcore achies', 'total achies', 'completed', 'collected hc achies', 'total hc achies', 'hc completed',
-  'hours played', 'last played', 'date completed', 'hack'];
+  'hours played', 'last played', 'date completed'];
 const ALIGN_RIGHT = ['appid', 'game id', 'amount done', 'hc amount done'];
 
 function alignColumns_(sheet, headers, numRows, force) {
