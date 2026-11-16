@@ -7,9 +7,14 @@ const DEFAULTS = {
   recentHours: 6,        // games played within this many hours are always re-checked (catches mid-session achievements)
   statusColumn: true,    // fill the STATUS column
   genreColumn: true,     // fill the GENRE column (if the sheet has one)
+  archivedOn: true,      // Steam: leave archived achievements out of TOTAL ACHIES (earned ones still count in COLLECTED)
+  missingNotes: true,    // Steam: note on COLLECTED ACHIES listing the achievements you are missing
   linkNames: true,       // turn game names into links to their Steam store pages
   postLastPlayed: true,  // Discord: post after a play session
   postCompletion: true,  // Discord: post when a game reaches 100%
+  postFailures: true,    // Discord: a short warning when an update fails (at most one per 6 hours)
+  postRare: true,        // Discord: post when you unlock a rare Steam achievement
+  rarePct: 5,            // ...rarer than this percent of players
   weeklyOn: true,        // Discord: weekly summary
   weeklyDay: 0,          // 0 = Sunday ... 6 = Saturday, in the sheet's time zone
   weeklyHour: 20,        // 0-23
@@ -36,6 +41,11 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 
 // Fixed behaviour (not shown in the menu).
 const STATUS_HEADER = 'STATUS';
+const MISS_NOTE = 'Missing achievements';           // note on COLLECTED ACHIES: what you still need
+const ARCH_NOTE = 'Archived achievements';          // note on TOTAL ACHIES: retired achievements that are not in the total
+let archLeft_ = 0;
+const ARCH_PER_RUN = 60;                            // games whose public total is looked up per update (the Steam store limits requests)
+const NOTE_MAX = 19500;                             // a cell note holds up to 20000 characters
 const STATUS_NOTE = 'Achievement Tracker: ';
 const STATUS_NOTE_OLD = /^(Steam|Achievement) Tracker: /;   // notes written by earlier versions carry the old name
 const GENRE_HEADER = 'GENRE';
@@ -123,11 +133,16 @@ function buildMenu_() {
     .addSeparator()
     .addItem('Completion % (highest first)', 'sortPctHigh')
     .addItem('Completion % (lowest first)', 'sortPctLow')
+    .addSeparator()
+    .addItem('Total achievements (most first)', 'sortTotHigh')
+    .addItem('Total achievements (least first)', 'sortTotLow')
+    .addSeparator()
     .addItem('Hours played (most first)', 'sortHours')
     .addItem('Last played (newest first)', 'sortRecent')
     .addItem('Genre (A \u2192 Z)', 'sortGenre')
     .addSeparator()
-    .addItem('Backlog status, then A \u2192 Z', 'sortBacklog')
+    .addItem('Backlog/Idle/Active/A-Z', 'sortBacklog')
+    .addItem('Active/Idle/Backlog/A-Z', 'sortBacklogActive')
     .addItem('Date completed (newest first)', 'sortDoneNew')
     .addItem('Date completed (oldest first)', 'sortDoneOld')
     .addSeparator()
@@ -139,18 +154,30 @@ function buildMenu_() {
     .addSeparator()
     .addItem('Add game rows\u2026', 'addGameRows');
 
+  const optionalMenu = ui.createMenu('Optional tabs')
+    .addItem('Build STATS tab (formulas and charts)', 'buildStats')
+    .addItem('Progress history (HISTORY tab): ' + onOff(historyOn_()) + ' (click to switch)', 'toggleHistory');
+
   const setupMenu = ui.createMenu('Sheet setup')
     .addItem('Set up blank sheet (Steam)', 'setupSheet')
     .addItem('Set up RetroAchievements tab', 'setupRetroSheet')
     .addSeparator()
     .addItem('Add BACKLOG STATUS column', 'addPlayStatusColumn')
     .addItem('Add DATE COMPLETED column', 'addDateCompletedColumn')
+    .addItem('Add totals to top', 'addTopTotals')
+    .addItem('Upgrade RetroAchievements columns (hardcore)', 'upgradeRetroLayout')
     .addSeparator()
-    .addItem('Add totals row under the header', 'addTopTotals')
-    .addItem('Upgrade RetroAchievements columns (hardcore)', 'upgradeRetroLayout');
+    .addItem('Apply text alignment (all tabs)', 'applyFormatting')
+    .addSeparator()
+    .addSubMenu(optionalMenu);
 
   const toolsMenu = ui.createMenu('Tools')
+    .addItem('Problems report', 'problemsReport')
     .addItem('Diagnose selected game', 'diagnoseGame')
+    .addSeparator()
+    .addItem('Import missing achievements (notes)', 'importMissingNotes')
+    .addItem('Back up the tabs', 'backupTabs')
+    .addSeparator()
     .addItem('Send test 100% post to Discord', 'sendTestCompletion');
 
   const accounts = ui.createMenu('Accounts')
@@ -170,6 +197,10 @@ function buildMenu_() {
     .addItem('Link game names (Steam): ' + onOff(c.linkNames), 'toggleLinkNames')
     .addItem('Genre column: ' + onOff(c.genreColumn), 'toggleGenre')
     .addItem('Status column (Steam): ' + onOff(c.statusColumn), 'toggleStatus');   // see also: RetroAchievements, Backlog status
+
+  const achData = ui.createMenu('Steam achievement data')
+    .addItem('Missing achievements note: ' + onOff(c.missingNotes), 'toggleMissingNotes')
+    .addItem('Leave archived achievements out of the total: ' + onOff(c.archivedOn), 'toggleArchived');
 
   const retro = ui.createMenu('RetroAchievements')
     .addItem('Track RetroAchievements: ' + onOff(c.raOn), 'toggleRetro')
@@ -191,6 +222,9 @@ function buildMenu_() {
   const discord = ui.createMenu('Discord')
     .addItem('Last-played posts: ' + onOff(c.postLastPlayed), 'toggleLastPlayed')
     .addItem('100% posts: ' + onOff(c.postCompletion), 'toggleCompletion')
+    .addItem('Failure warnings: ' + onOff(c.postFailures), 'toggleFailures')
+    .addItem('Rare achievement posts: ' + onOff(c.postRare), 'toggleRare')
+    .addItem('Rare means under: ' + c.rarePct + '% of players (change)', 'settingRarePct')
     .addItem('Weekly summary: ' + onOff(c.weeklyOn), 'toggleWeekly')
     .addItem('Weekly summary time: ' + DAY_NAMES[c.weeklyDay] + ' ' + c.weeklyHour + ':00 (change)', 'settingWeeklyTime');
 
@@ -198,6 +232,7 @@ function buildMenu_() {
     .addSubMenu(accounts)
     .addSubMenu(updates)
     .addSubMenu(sheets)
+    .addSubMenu(achData)
     .addSubMenu(retro)
     .addSubMenu(backlog)
     .addSubMenu(rules)
@@ -245,6 +280,53 @@ function toggle_(key, label) {
   buildMenu_();
   alert_(label + ' is now ' + (now ? 'ON' : 'OFF') + '.');
 }
+// Button: fills the missing-achievements note on COLLECTED ACHIES for every Steam game now (normally a game's note is
+// refreshed when the game is next checked). Turns the notes setting on.
+function importMissingNotes() {
+  const ui = SpreadsheetApp.getUi();
+  const a = ui.alert('Import missing achievements',
+    'This checks every game on the Steam tab and puts the achievements you are still missing (name and description) into a note on its COLLECTED ACHIES cell.\n\n' +
+    'It can take a while on a long list. It does not post anything to Discord. Continue?', ui.ButtonSet.OK_CANCEL);
+  if (a !== ui.Button.OK) return;
+  if (!cfg_().missingNotes) { setCfg_({ missingNotes: true }); buildMenu_(); }
+  const t0 = Date.now();
+  const r = withLock_(() => {
+    RUN_T0 = t0;
+    updateSteam_(true, true);
+    // The Steam store limits how fast archived-achievement totals can be looked up, so a long list needs a few passes.
+    for (let pass = 1; pass < 6 && archLeft_ > 0 && Date.now() - t0 < 200000; pass++) { Utilities.sleep(30000); updateSteam_(true, true); }
+    return true;
+  });
+  if (r) alert_('Done. Hover over a COLLECTED ACHIES cell to see the missing achievements. Games you have completed have no note.' +
+    (archLeft_ > 0 ? '\n\n' + archLeft_ + ' games still need their archived-achievement check (the Steam store limits requests). Run this again in a few minutes to finish them.' : ''));
+}
+
+function toggleArchived() {
+  const now = !cfg_().archivedOn;
+  setCfg_({ archivedOn: now });
+  buildMenu_();
+  alert_('Leaving archived achievements out of the total is now ' + (now ? 'ON' : 'OFF') + '. It takes effect as games are next checked; Tools > Import missing achievements (notes) refreshes every game now.');
+}
+
+function toggleMissingNotes() {
+  const wasOn = cfg_().missingNotes;
+  setCfg_({ missingNotes: !wasOn });
+  buildMenu_();
+  if (wasOn) {                                           // switching off removes the notes the script made
+    const sheet = targetSheet_();
+    const headers = headersOf_(sheet), idx = headers.indexOf('collected achies');
+    const n = trimGameRows_(sheet, headers.findIndex(h => NAME_HEADERS.indexOf(h) !== -1));
+    if (idx >= 0 && n > 0) {
+      const r = sheet.getRange(topRow_(sheet), idx + 1, n, 1);
+      const notes = r.getNotes();
+      let changed = false;
+      notes.forEach(x => { if (String(x[0]).indexOf(MISS_NOTE) === 0) { x[0] = ''; changed = true; } });
+      if (changed) r.setNotes(notes);
+    }
+    alert_('Missing achievements notes are OFF and the existing ones were removed.');
+  } else alert_('Missing achievements notes are ON. They appear on COLLECTED ACHIES at the next update.');
+}
+
 function toggleLinkNames() {
   const wasOn = cfg_().linkNames;
   setCfg_({ linkNames: !wasOn });
@@ -280,6 +362,31 @@ function toggleRaWant() { toggle_('raWantAuto', 'Auto-adding your RetroAchieveme
 function toggleGenre() { toggle_('genreColumn', 'The GENRE column'); }
 function toggleStatus() { toggle_('statusColumn', 'The STATUS column'); }
 function toggleLastPlayed() { toggle_('postLastPlayed', 'Last-played posts'); }
+function toggleFailures() { toggle_('postFailures', 'Failure warnings'); }
+function toggleHistory() {
+  const now = !historyOn_();
+  setCfg_({ historyOn: now });
+  if (now) {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss.getSheetByName(HISTORY_TAB)) {
+      const sh = ss.insertSheet(HISTORY_TAB);
+      sh.getRange(1, 1, 1, HISTORY_HEADERS.length).setValues([HISTORY_HEADERS]).setFontWeight('bold');
+      sh.setFrozenRows(1);
+    }
+  }
+  buildMenu_();
+  alert_(now ? 'Progress history is ON. The "' + HISTORY_TAB + '" tab gets one row per day at the next update.' : 'Progress history is OFF. The "' + HISTORY_TAB + '" tab is kept but no longer updated.');
+}
+function toggleRare() { toggle_('postRare', 'Rare achievement posts'); }
+function settingRarePct() {
+  const v = ask_('Rare achievement limit', 'Post a rare achievement when fewer than this percent of players have it (0.1-50, currently ' + cfg_().rarePct + ').');
+  if (v === null) return;
+  const n = Number(String(v).replace(',', '.').replace('%', ''));
+  if (!(n >= 0.1 && n <= 50)) { alert_('Please enter a number from 0.1 to 50. Nothing was changed.'); return; }
+  setCfg_({ rarePct: n });
+  buildMenu_();
+  alert_('Achievements held by fewer than ' + n + '% of players count as rare.');
+}
 function toggleCompletion() { toggle_('postCompletion', '100% completion posts'); }
 function toggleWeekly() { toggle_('weeklyOn', 'The weekly summary'); }
 
@@ -385,10 +492,13 @@ function showSettings() {
     'Re-check games played in last ' + c.recentHours + ' h; shared/free games every ' + c.sharedMinutes + ' min',
     'Auto-add Want to Play games: ' + onOff(c.raWantAuto),
     'Link game names: ' + onOff(c.linkNames),
+    'Missing achievements note (Steam): ' + onOff(c.missingNotes),
     'Genre column: ' + onOff(c.genreColumn),
     'Status column: ' + onOff(c.statusColumn),
     'Discord last-played posts: ' + onOff(c.postLastPlayed),
     'Discord 100% posts: ' + onOff(c.postCompletion),
+    'Discord failure warnings: ' + onOff(c.postFailures) + '\nProgress history log: ' + onOff(historyOn_()),
+    'Discord rare achievement posts: ' + onOff(c.postRare) + ' (under ' + c.rarePct + '% of players)',
     'Discord weekly summary: ' + onOff(c.weeklyOn) + ' (' + DAY_NAMES[c.weeklyDay] + ' ' + c.weeklyHour + ':00)',
     'Steam key / ID: ' + (PropertiesService.getScriptProperties().getProperty('STEAM_API_KEY') ? 'saved' : 'NOT set'),
     'Discord webhook: ' + (PropertiesService.getScriptProperties().getProperty('DISCORD_WEBHOOK') ? 'saved' : 'NOT set')
@@ -434,8 +544,14 @@ function withLock_(fn) {
 }
 
 // Updates the Steam tab, then the RetroAchievements tab (if turned on), then sends the Discord posts.
+// A run stops fetching new data after this long, so Apps Script's 6 minute limit never cuts it off half way.
+let RUN_T0 = Date.now();
+const RUN_BUDGET_MS = 270000;
+function overBudget_() { return Date.now() - RUN_T0 > RUN_BUDGET_MS; }
+
 function run_(force, weeklyNow) {
   withLock_(() => {
+    RUN_T0 = Date.now();
     const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
     const errors = [];
     let tracked = [];
@@ -443,15 +559,16 @@ function run_(force, weeklyNow) {
     if (cfg_().raOn) {
       try { tracked = tracked.concat(updateRetro_(force) || []); } catch (e) { errors.push(e); }
     }
-    if (errors.length) throw errors[0];
+    if (errors.length) { failureWarning_(errors[0]); throw errors[0]; }
     // A game listed twice on a sheet is only counted once in Discord posts.
     const seenKeys = {};
     tracked = tracked.filter(t => { const k = (t.src || 'steam') + ':' + t.appid; if (seenKeys[k]) return false; seenKeys[k] = true; return true; });
     notifyDiscord_(tracked, force, weeklyNow, tz);
+    try { logHistory_(tracked, tz); } catch (e) { /* the log is optional */ }
   });
 }
 
-function updateSteam_(force) {
+function updateSteam_(force, forceNotes) {
   const props = PropertiesService.getScriptProperties();
   const key = props.getProperty('STEAM_API_KEY');
   let steamId = props.getProperty('STEAM_ID');
@@ -653,6 +770,7 @@ function updateSteam_(force) {
   })));
   const CHUNK = 30;
   for (let s = 0; s < toFetch.length; s += CHUNK) {
+    if (overBudget_()) { toFetch.slice(s).forEach(it => { it.ach = { err: 'ran out of time' }; }); break; }   // the rest is checked on the next update
     const batch = toFetch.slice(s, s + CHUNK);
     const resps = fetchAch(batch);
     batch.forEach((it, n) => { it.ach = parseAch_(resps[n]); });
@@ -688,6 +806,68 @@ function updateSteam_(force) {
         : { none: 'nostats' };
     });
   }
+
+  // --- Archived achievements: ones Steam has retired from the game's list. They are not part of the total, but ones you
+  // earned stay in COLLECTED. The public total comes from the Steam store page ("Includes N Steam Achievements"); the
+  // names come from comparing your list with the game's current list when that list leaves them out. Checked again every 7 days. ---
+  const archCache = loadJson_(props, 'ARCH_CACHE') || {};      // appid -> [time, your list size, archived count, archived names or null]
+  const archWith = conf.archivedOn ? toFetch.filter(it => it.ach && it.ach.names && it.ach.total > 0) : [];
+  const archAll = archWith.filter(it => { const c0 = archCache[it.game.appid]; return !c0 || c0[1] !== it.ach.total || nowSec - c0[0] > 7 * 86400; });
+  const archDue = archAll.slice(0, ARCH_PER_RUN);
+  archLeft_ = archAll.length - archDue.length;                // games still to check on the next update
+
+  // The share of players who have each achievement (public, no key): used to sort the missing list, to spot rare unlocks and to find archived ones.
+  const wantGlob = toFetch.filter(it => it.ach && it.ach.names && it.ach.total > 0 && (
+    ((conf.missingNotes || forceNotes) && it.ach.miss && it.ach.miss.length) ||
+    (conf.postRare && lastUnlock[it.game.appid] !== undefined && (it.ach.lastUnlock || 0) > lastUnlock[it.game.appid]) ||
+    archDue.indexOf(it) !== -1));
+  fetchGlobals_(wantGlob);
+
+  for (let s = 0; s < archDue.length; s += 10) {
+    if (overBudget_()) break;
+    const batch = archDue.slice(s, s + 10);
+    let store = [];
+    try {
+      store = UrlFetchApp.fetchAll(batch.map(it => ({
+        url: 'https://store.steampowered.com/api/appdetails?appids=' + it.game.appid + '&cc=us&l=english', muteHttpExceptions: true })));
+    } catch (e) { break; }
+    batch.forEach((it, n) => {
+      try {
+        if (store[n].getResponseCode() !== 200) return;                       // asked again next run
+        const entry = JSON.parse(store[n].getContentText())[it.game.appid];
+        const pub = entry && entry.success && entry.data && entry.data.achievements ? Number(entry.data.achievements.total) : 0;
+        let names = null;
+        const cur = it.glob;
+        if (cur && Object.keys(cur).length && it.ach.names.filter(x => cur[x] !== undefined).length > 0) names = it.ach.names.filter(x => x && cur[x] === undefined);
+        let k = pub > 0 && pub < it.ach.total ? it.ach.total - pub : 0;      // how many your list has beyond the public total
+        if (!k && names && names.length) k = names.length;
+        if (names && names.length !== k) names = null;                       // the two sources disagree: trust only the count
+        archCache[it.game.appid] = [nowSec, it.ach.total, k, k && names ? names.slice(0, 60) : null];
+      } catch (e) { /* leave the numbers alone */ }
+    });
+    if (s + 10 < archDue.length) Utilities.sleep(1500);
+  }
+  if (archDue.length) saveJson_(props, 'ARCH_CACHE', archCache);
+  archWith.forEach(it => {
+    const a = archCache[it.game.appid], r = it.ach;
+    if (!a || !a[2] || a[1] !== r.total) return;
+    if (!(r.unlocked > r.total - a[2])) return;                              // only where you hold more than the public total: that proves archived ones are earned
+    r.archived = a[2];
+    if (a[3]) {                                                               // names known
+      const set = {}; a[3].forEach(x => { set[x] = 1; });
+      r.archivedEarned = r.gotNames.filter(x => set[x]).length;
+      r.miss = r.miss.filter(m => !set[m[0]]);
+    } else r.maybeArch = true;                                                // which ones are archived is not known
+    r.total = r.total - r.archived;                                           // archived achievements are not part of the total
+  });
+
+  // Missing achievements, easiest (most common) first, with the share of players who have each.
+  toFetch.forEach(it => {
+    const r = it.ach;
+    if (!r || !r.miss || !it.glob) return;
+    r.miss.forEach(m => { const p = it.glob[m[0]]; m[3] = p === undefined ? null : p; });
+    r.miss.sort((x, y) => (y[3] === null ? -1 : y[3]) - (x[3] === null ? -1 : x[3]));
+  });
 
   // --- Genres: looked up once per game (cached), paced to respect the Steam store's rate limit ---
   const genreCache = loadJson_(props, 'GENRE_CACHE') || {};
@@ -735,6 +915,7 @@ function updateSteam_(force) {
   };
   const now = new Date();
   const tracked = [];
+  const noteU = {}, noteT = {};                               // row -> new note text for COLLECTED / TOTAL ('' clears a note this script made)
 
   items.forEach(it => {
     const i = it.i;
@@ -758,7 +939,7 @@ function updateSteam_(force) {
       const r = it.ach;
       if (r.err) {
         // Steam hiccup: keep the old values and leave LAST UPDATED alone; it is retried on the next run.
-        setStatus(i, 'Retrying' + tag, 'Steam returned an error (' + r.err + '). The script tries again on the next update. ' + why);
+        setStatus(i, 'Retrying' + tag, (r.err === 'ran out of time' ? 'This update ran out of time before reaching this game (a long list).' : 'Steam returned an error (' + r.err + ').') + ' The script tries again on the next update. ' + why);
       } else if (r.none === 'private') {
         setStatus(i, 'Not owned or private', 'Steam returned no data: either you don\'t have this game, or your Steam Profile and Game details are private. If you do own it, set both to Public in Steam\'s privacy settings. ' + it.note);
       } else if (r.none === 'nostats') {
@@ -772,12 +953,18 @@ function updateSteam_(force) {
         ach = r;
         // Achievements unlocked since the last time this game was seen (listed in the Discord post).
         const lu = lastUnlock[game.appid];
-        if (lu !== undefined) newAch = (ach.recent || []).filter(a => a[2] > lu);
+        if (lu !== undefined) newAch = (ach.recent || []).filter(a => a[2] > lu).map(a => [a[0], a[1], a[2], a[3], it.glob && it.glob[a[3]] !== undefined ? it.glob[a[3]] : null]);
         lastUnlock[game.appid] = Math.max(lu || 0, ach.lastUnlock || 0);
         put('unlocked', i, ach.unlocked);
         put('total', i, ach.total);
-        if (out.completed) put('completed', i, ach.total > 0 && ach.unlocked === ach.total && ach.lastUnlock ? new Date(ach.lastUnlock * 1000) : '');
-        setStatus(i, (ach.total && ach.unlocked === ach.total ? 'Complete' : (ach.notStarted ? 'Not started' : 'OK')) + tag, why);
+        noteT[i] = ach.archived
+          ? ARCH_NOTE + ': this game has ' + ach.archived + ' archived achievement' + (ach.archived === 1 ? '' : 's') +
+            (ach.archivedEarned !== undefined ? ' (' + ach.archivedEarned + ' earned by you)' : '') + '. ' +
+            'Archived achievements are not counted in the total, but any you earned are counted in COLLECTED ACHIES, so it can be above the total.'
+          : '';
+        if (conf.missingNotes || forceNotes) noteU[i] = ach.unlocked >= ach.total ? '' : missingNote_(ach.miss, ach.maybeArch);
+        if (out.completed) put('completed', i, ach.total > 0 && ach.unlocked >= ach.total && ach.lastUnlock ? new Date(ach.lastUnlock * 1000) : '');
+        setStatus(i, (ach.total && ach.unlocked >= ach.total ? 'Complete' : (ach.notStarted ? 'Not started' : 'OK')) + tag, why);
         put('updated', i, now);
       }
     }
@@ -801,6 +988,19 @@ function updateSteam_(force) {
   writeColumns_(sheet, col, out, numRows, orig);
   alignColumns_(sheet, headers, numRows);
   if (statusNotes && statusNotes.some((n, i) => n[0] !== statusNotesOld[i])) sheet.getRange(top, col.status + 1, numRows, 1).setNotes(statusNotes);
+  // Notes on COLLECTED (missing achievements) and TOTAL (archived achievements). Only notes the script made are replaced or cleared.
+  [[col.unlocked, noteU, MISS_NOTE], [col.total, noteT, ARCH_NOTE]].forEach(g => {
+    if (g[0] < 0 || !Object.keys(g[1]).length) return;
+    const range = sheet.getRange(top, g[0] + 1, numRows, 1);
+    const notes = range.getNotes();
+    let changed = false;
+    Object.keys(g[1]).forEach(k => {
+      const cur = String(notes[k][0]), next = g[1][k];
+      if (cur !== '' && cur.indexOf(g[2]) !== 0) return;                  // your own note: left alone
+      if (cur !== next) { notes[k][0] = next; changed = true; }
+    });
+    if (changed) range.setNotes(notes);
+  });
 
   // --- Link each game name to its Steam store page (the name text itself is unchanged) ---
   if (conf.linkNames) {
@@ -886,7 +1086,7 @@ function saveJson_(props, key, obj) {
 }
 
 const isNum_ = v => typeof v === 'number' && !isNaN(v);
-const isComplete_ = t => isNum_(t.unlocked) && isNum_(t.total) && t.total > 0 && t.unlocked === t.total;
+const isComplete_ = t => isNum_(t.unlocked) && isNum_(t.total) && t.total > 0 && t.unlocked >= t.total;   // can exceed the total: archived achievements you earned count as collected
 const round1_ = n => Math.round(n * 10) / 10;
 const srcOf_ = t => t.src || 'steam';
 const SRC_NAME = { steam: 'Steam', ra: 'RetroAchievements' };
@@ -1067,10 +1267,28 @@ function notifyDiscord_(tracked, force, weeklyNow, tz) {
   }
 
   // ----- 2. (continued) post the completions -----
-  (c.postCompletion ? completed : []).forEach(t => {
-    postDiscord_({ embeds: [completionEmbed_(t, at100(srcOf_(t)), takePend(t.appid), false)] });
-    Utilities.sleep(500);
+  // Every game that reached 100% in this update gets its own post. One that Discord rejects is not marked as done,
+  // so it is announced again on the next update.
+  (c.postCompletion ? completed : []).forEach((t, i) => {
+    if (i > 0 || pick) Utilities.sleep(1200);                    // stay under Discord's webhook rate limit
+    const code = postDiscord_({ embeds: [completionEmbed_(t, at100(srcOf_(t)), takePend(t.appid), false)] });
+    if (code < 200 || code >= 300) delete done[t.appid];
   });
+
+  // ----- Rare achievements (Steam): one short post each for the rarest new unlocks -----
+  if (c.postRare) {
+    const rare = [];
+    tracked.forEach(t => (t.newAch || []).forEach(a => { if (isNum_(a[4]) && a[4] < c.rarePct) rare.push({ game: t.title, a: a, cover: t.cover }); }));
+    rare.sort((x, y) => x.a[4] - y.a[4]);
+    rare.slice(0, 3).forEach((r, i) => {
+      if (i > 0 || pick || completed.length) Utilities.sleep(1200);
+      const pc = r.a[4] < 10 ? Math.round(r.a[4] * 10) / 10 : Math.round(r.a[4]);
+      const embed = { title: '\uD83D\uDC8E Rare achievement: ' + r.a[0], description: r.a[1] || '', color: 0x9b59b6,
+        fields: [{ name: 'Game', value: r.game, inline: true }, { name: 'Players who have it', value: pc + '%', inline: true }] };
+      if (r.a[2]) embed.timestamp = new Date(r.a[2] * 1000).toISOString();
+      postDiscord_({ embeds: [embed] });
+    });
+  }
 
   // ----- 3. Weekly summary -----
   const weekRaw = loadJson_(props, 'WEEK_BASE');  // appid -> [hours, unlocked] at the start of the week
@@ -1152,15 +1370,25 @@ function notifyDiscord_(tracked, force, weeklyNow, tz) {
   } catch (e) { /* storage full: notifications may repeat */ }
 }
 
+// Posts to the webhook. When Discord says "slow down" (429) or has a hiccup (5xx) it waits and tries again, so a burst of posts isn't lost.
 function postDiscord_(payload) {
   const hook = PropertiesService.getScriptProperties().getProperty('DISCORD_WEBHOOK');
   if (!hook) return;
-  return UrlFetchApp.fetch(hook, {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  }).getResponseCode();
+  let code = 0;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = UrlFetchApp.fetch(hook, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+    code = res.getResponseCode();
+    if (code !== 429 && code < 500) return code;
+    let wait = 1500;
+    if (code === 429) { try { wait = Math.min(10000, Math.ceil((Number(JSON.parse(res.getContentText()).retry_after) || 1) * 1000) + 300); } catch (e) { /* default wait */ } }
+    Utilities.sleep(wait);
+  }
+  return code;
 }
 
 // ---------- troubleshooting ----------
@@ -1460,6 +1688,9 @@ function sortHours() { sortList_('hours'); }
 function sortRecent() { sortList_('recent'); }
 function sortGenre() { sortList_('genre'); }
 function sortBacklog() { sortList_('backlog'); }
+function sortBacklogActive() { sortList_('backlogActive'); }
+function sortTotHigh() { sortList_('totHigh'); }
+function sortTotLow() { sortList_('totLow'); }
 function sortDoneNew() { sortList_('doneNew'); }
 function sortDoneOld() { sortList_('doneOld'); }
 
@@ -1467,6 +1698,8 @@ const SORT_LABELS = {
   az: 'A → Z', za: 'Z → A', pctHigh: 'completion % (highest first)', pctLow: 'completion % (lowest first)',
   hours: 'hours played (most first)', recent: 'last played (newest first)', genre: 'genre (A → Z)',
   backlog: 'backlog status (BACKLOG, ACTIVE, IDLE, COMPLETED), then A → Z',
+  totHigh: 'total achievements (most first)', totLow: 'total achievements (least first)',
+  backlogActive: 'backlog status (ACTIVE, IDLE, BACKLOG, then the rest), then A → Z',
   doneNew: 'date completed (newest first)', doneOld: 'date completed (oldest first)'
 };
 
@@ -1478,10 +1711,11 @@ function sortList_(kind) {
     const nameIdx = headers.findIndex(h => NAME_HEADERS.indexOf(h) !== -1);
     if (nameIdx === -1) { alert_('Could not find a GAME LIST column in row 1 of "' + sheet.getName() + '".'); return; }
     const need = { pctHigh: ['collected achies', 'total achies'], pctLow: ['collected achies', 'total achies'],
+                   totHigh: ['total achies'], totLow: ['total achies'],
                    hours: ['hours played'], recent: ['last played'], genre: ['genre'],
                    doneNew: ['date completed'], doneOld: ['date completed'] }[kind] || [];
     const statusIdx = headers.findIndex(h => PLAY_STATUS_HEADERS.indexOf(h) !== -1);
-    if (kind === 'backlog' && statusIdx === -1) {
+    if ((kind === 'backlog' || kind === 'backlogActive') && statusIdx === -1) {
       alert_('"' + sheet.getName() + '" has no BACKLOG STATUS column. Run Achievement Tracker > Add backlog status column first.');
       return;
     }
@@ -1500,7 +1734,7 @@ function sortList_(kind) {
     const rows = block.map((r, i) => {
       const unl = num(cellOf(r, 'collected achies')), tot = num(cellOf(r, 'total achies'));
       const last = cellOf(r, 'last played');
-      return { i: i, name: String(r[nameIdx]).trim(), pct: unl !== null && tot ? unl / tot : null,
+      return { i: i, tot: tot, name: String(r[nameIdx]).trim(), pct: unl !== null && tot ? unl / tot : null,
                hours: num(cellOf(r, 'hours played')), last: last instanceof Date ? last.getTime() : null,
                genre: String(cellOf(r, 'genre')).trim(),
                done: (v => (v instanceof Date ? v.getTime() : null))(cellOf(r, 'date completed')),
@@ -1516,8 +1750,12 @@ function sortList_(kind) {
     };
     const STATUS_ORDER = { BACKLOG: 0, ACTIVE: 1, PLAYED: 1, IDLE: 2, COMPLETED: 3 };   // PLAYED = the old name for ACTIVE
     const statusRank = r => (STATUS_ORDER[r.status] !== undefined ? STATUS_ORDER[r.status] : 4);   // blank / unknown last
+    const ACTIVE_ORDER = { ACTIVE: 0, PLAYED: 0, IDLE: 1, BACKLOG: 2, COMPLETED: 3 };
+    const activeRank = r => (ACTIVE_ORDER[r.status] !== undefined ? ACTIVE_ORDER[r.status] : 4);
     const cmps = {
       doneNew: byNum('done', true), doneOld: byNum('done', false),
+      totHigh: byNum('tot', true), totLow: byNum('tot', false),
+      backlogActive: (a, b) => (activeRank(a) - activeRank(b)) || nameCmp(a, b),
       backlog: (a, b) => (statusRank(a) - statusRank(b)) || nameCmp(a, b),
       az: nameCmp, za: (a, b) => nameCmp(b, a),
       pctHigh: byNum('pct', true), pctLow: byNum('pct', false), hours: byNum('hours', true), recent: byNum('last', true),
@@ -1721,6 +1959,29 @@ function upgradeRetroLayout_(sheet) {
 // ---------- totals row under the header ----------
 // Inserts a TOTALS row directly under the header that mirrors the totals row at the bottom, so the totals are always in view.
 // Rows below move down by one; the script finds the first game row by looking for this row.
+
+// Button: applies the column text alignment to every row (totals rows included) on the Steam tab and the RetroAchievements tab.
+function applyFormatting() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const c = cfg_();
+  const names = [c.sheetName, c.raSheetName].filter((n, i, a) => n && a.indexOf(n) === i);
+  const done = [];
+  names.forEach(n => {
+    const sh = ss.getSheetByName(n);
+    if (!sh || isBlankSheet_(sh)) return;
+    const rows = sh.getLastRow() - 1;
+    if (rows < 1) return;
+    const headers = headersOf_(sh);
+    [[ALIGN_CENTER, 'center'], [ALIGN_RIGHT, 'right']].forEach(g => g[0].forEach(h => {
+      const i = headers.indexOf(h);
+      if (i >= 0) sh.getRange(2, i + 1, rows, 1).setHorizontalAlignment(g[1]);
+    }));
+    done.push(n);
+  });
+  const props = PropertiesService.getScriptProperties();
+  props.deleteProperty('ALIGNED');
+  alert_(done.length ? 'Text alignment applied to: ' + done.join(', ') + '.' : 'No game tabs found to format.');
+}
 
 function addTopTotals() {
   const sheet = targetSheet_();
@@ -2863,6 +3124,46 @@ function achLines_(list, more) {
   return lines.join('\n');
 }
 
+// Fills it.glob = {achievement api name: percent of players who have it} for each item (null when Steam gives no list).
+function fetchGlobals_(items) {
+  for (let s = 0; s < items.length; s += 30) {
+    if (overBudget_()) return;
+    const batch = items.slice(s, s + 30);
+    let resps = [];
+    try {
+      resps = UrlFetchApp.fetchAll(batch.map(it => ({
+        url: 'https://api.steampowered.com/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/?gameid=' + it.game.appid + '&format=json',
+        muteHttpExceptions: true })));
+    } catch (e) { return; }
+    batch.forEach((it, n) => {
+      it.glob = null;
+      try {
+        if (resps[n].getResponseCode() !== 200) return;
+        const g = JSON.parse(resps[n].getContentText()).achievementpercentages.achievements || [];
+        const m = {}; g.forEach(a => { m[String(a.name)] = Number(a.percent); });
+        if (g.length) it.glob = m;
+      } catch (e) { /* no list */ }
+    });
+    if (s + 30 < items.length) Utilities.sleep(300);
+  }
+}
+
+// The text of the "missing achievements" note, kept under the 20000 character limit of a cell note.
+function missingNote_(miss, maybeArch) {
+  if (!miss || !miss.length) return '';
+  const head = MISS_NOTE + ' (' + miss.length + ')' + (maybeArch ? ', may include archived ones' : '') +
+    (miss.some(m => m[3] !== null && m[3] !== undefined) ? ', easiest first (% of players who have it)' : '') + ':';
+  let text = head, used = 0;
+  for (let k = 0; k < miss.length; k++) {
+    const pc = miss[k][3] !== null && miss[k][3] !== undefined && isFinite(miss[k][3]) ? ' (' + (miss[k][3] < 10 ? Math.round(miss[k][3] * 10) / 10 : Math.round(miss[k][3])) + '%)' : '';
+    const line = '\n\u2022 ' + miss[k][1] + (miss[k][2] ? ' \u2014 ' + miss[k][2] : '') + pc;
+    const tail = '\n\u2026and ' + (miss.length - k) + ' more';
+    if (text.length + line.length + tail.length > NOTE_MAX) { text += tail; return text; }
+    text += line; used++;
+  }
+  return text;
+}
+
 function parseAch_(res) {
   const code = res.getResponseCode();
   let ps = null;
@@ -2875,8 +3176,10 @@ function parseAch_(res) {
     const lastUnlock = got.reduce((m, a) => Math.max(m, a.unlocktime || 0), 0);
     // The newest unlocks with their names (used for the Discord posts).
     const recent = got.filter(a => a.unlocktime).sort((a, b) => b.unlocktime - a.unlocktime).slice(0, 15)
-      .map(a => [clip_(a.name || a.apiname, 60), clip_(a.description, 140), a.unlocktime]);
-    return { unlocked: got.length, total: ps.achievements.length, lastUnlock: lastUnlock, recent: recent };
+      .map(a => [clip_(a.name || a.apiname, 60), clip_(a.description, 140), a.unlocktime, String(a.apiname || '')]);
+    const miss = ps.achievements.filter(a => a.achieved !== 1).map(a => [String(a.apiname || ''), String(a.name || a.apiname || '').replace(/\s+/g, ' ').trim(), String(a.description || '').replace(/\s+/g, ' ').trim()]);
+    return { unlocked: got.length, total: ps.achievements.length, lastUnlock: lastUnlock, recent: recent, miss: miss,
+             names: ps.achievements.map(a => String(a.apiname || '')), gotNames: got.map(a => String(a.apiname || '')) };
   }
   if (/not public|private/i.test(msg)) return { none: 'private' };
   if (/no stats/i.test(msg)) return { none: 'nostats' };
@@ -2945,4 +3248,257 @@ function removeTriggers() {
     .filter(t => t.getHandlerFunction() === 'updateSteamSheet')
     .forEach(t => ScriptApp.deleteTrigger(t));
   setCfg_({ autoOn: false });
+}
+
+
+// ---------- Failure warning ----------
+// Posts one short warning to Discord when an update throws (a bad key, a private profile, Steam down...), at most once per 6 hours.
+function failureWarning_(err) {
+  try {
+    const c = cfg_();
+    const props = PropertiesService.getScriptProperties();
+    if (!c.postFailures || !props.getProperty('DISCORD_WEBHOOK')) return;
+    const last = Number(props.getProperty('FAIL_LAST') || 0), now = Date.now();
+    if (now - last < 6 * 3600 * 1000) return;
+    props.setProperty('FAIL_LAST', String(now));
+    postDiscord_({ embeds: [{ title: '⚠️ Achievement Tracker update failed', color: 0xe74c3c,
+      description: clip_(err && err.message ? err.message : String(err), 400) + '\n\nThe next update tries again. Open the sheet and run Update now to see the full message.' }] });
+  } catch (e) { /* never hide the original error */ }
+}
+
+// ---------- Progress history ----------
+// Optional: it is only kept after you turn it on (Sheet setup > Optional tabs). A tab that already exists keeps logging
+// unless you turned it off.
+function historyOn_() {
+  let saved = {};
+  try { saved = JSON.parse(PropertiesService.getScriptProperties().getProperty('SETTINGS') || '{}'); } catch (e) { /* defaults */ }
+  if (saved.historyOn !== undefined) return !!saved.historyOn;
+  return !!SpreadsheetApp.getActiveSpreadsheet().getSheetByName(HISTORY_TAB);
+}
+
+// One row per day on a HISTORY tab (the day's last update wins), for charts of your progress over time.
+const HISTORY_TAB = 'HISTORY';
+const HISTORY_HEADERS = ['DATE', 'STEAM COLLECTED', 'STEAM TOTAL', 'STEAM GAMES AT 100%', 'STEAM HOURS', 'RA COLLECTED', 'RA TOTAL', 'RA GAMES AT 100%'];
+
+function logHistory_(tracked, tz) {
+  if (!historyOn_() || !tracked || !tracked.length) return;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(HISTORY_TAB);
+  if (!sh) {
+    sh = ss.insertSheet(HISTORY_TAB);
+    sh.getRange(1, 1, 1, HISTORY_HEADERS.length).setValues([HISTORY_HEADERS]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  const sum = (src, k) => tracked.filter(t => srcOf_(t) === src).reduce((n, t) => n + (isNum_(t[k]) ? t[k] : 0), 0);
+  const n100 = src => tracked.filter(t => srcOf_(t) === src && isComplete_(t)).length;
+  const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  const row = [today, sum('steam', 'unlocked'), sum('steam', 'total'), n100('steam'), Math.round(sum('steam', 'hours') * 10) / 10,
+    sum('ra', 'unlocked'), sum('ra', 'total'), n100('ra')];
+  const last = sh.getLastRow();
+  const lastDay = last >= 2 ? sh.getRange(last, 1).getValue() : '';
+  const lastTxt = lastDay instanceof Date ? Utilities.formatDate(lastDay, tz, 'yyyy-MM-dd') : String(lastDay);
+  const target = last >= 2 && lastTxt === today ? last : Math.max(last, 1) + 1;
+  sh.getRange(target, 1, 1, row.length).setValues([row]);
+}
+
+// ---------- Problems report ----------
+// Lists every game that needs attention on the Steam and RetroAchievements tabs, with a link to its row.
+const PROBLEMS_TAB = 'PROBLEMS';
+const OK_STATUS = /^(OK|Complete|Not started)\b/;
+
+function problemsReport() {
+  const r = withLock_(problemsReport_);
+  if (r) alert_(r);
+}
+
+function problemsReport_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const c = cfg_();
+  const found = [];
+  [c.sheetName, c.raSheetName].forEach(name => {
+    const sh = ss.getSheetByName(name);
+    if (!sh || isBlankSheet_(sh)) return;
+    const headers = headersOf_(sh);
+    const nameIdx = headers.findIndex(h => NAME_HEADERS.indexOf(h) !== -1);
+    if (nameIdx === -1) return;
+    const n = trimGameRows_(sh, nameIdx), top = topRow_(sh);
+    if (n < 1) return;
+    const names = sh.getRange(top, nameIdx + 1, n, 1).getValues();
+    const nameNotes = sh.getRange(top, nameIdx + 1, n, 1).getNotes();
+    const stIdx = headers.indexOf('status');
+    const st = stIdx >= 0 ? sh.getRange(top, stIdx + 1, n, 1).getValues() : null;
+    const stNotes = stIdx >= 0 ? sh.getRange(top, stIdx + 1, n, 1).getNotes() : null;
+    for (let i = 0; i < n; i++) {
+      const game = String(names[i][0]).trim();
+      if (!game) continue;
+      const clean = t => String(t || '').replace(STATUS_NOTE_OLD, '').replace(RA_NOTE, '').replace(/\s+/g, ' ').trim();
+      if (st) {
+        const label = String(st[i][0]).trim();
+        if (label && (!OK_STATUS.test(label) || /Check match/.test(label)))
+          found.push([name, top + i, game, label, clean(stNotes[i][0])]);
+      }
+      const nn = String(nameNotes[i][0]);
+      if (nn.indexOf(RA_NOTE) === 0 && name === c.raSheetName) {
+        const body = clean(nn);
+        found.push([name, top + i, game, /no achievements/i.test(body) ? 'No achievements' : /not found/i.test(body) ? 'Not found' : /several/i.test(body) ? 'Several matches' : 'Check match', body]);
+      }
+    }
+  });
+  let sh = ss.getSheetByName(PROBLEMS_TAB);
+  if (!found.length) {
+    if (sh) sh.clear();
+    return 'No problems found. Every game on the tabs has a clean status.';
+  }
+  if (!sh) sh = ss.insertSheet(PROBLEMS_TAB);
+  sh.clear();
+  sh.getRange(1, 1, 1, 5).setValues([['TAB', 'ROW', 'GAME', 'PROBLEM', 'WHAT TO DO / DETAILS']]).setFontWeight('bold');
+  sh.setFrozenRows(1);
+  const body = found.map(f => [f[0], f[1], f[2], f[3], f[4]]);
+  sh.getRange(2, 1, body.length, 5).setValues(body);
+  const links = found.map(f => { const t = ss.getSheetByName(f[0]); return ['=HYPERLINK("#gid=' + t.getSheetId() + '&range=A' + f[1] + '",' + f[1] + ')']; });
+  sh.getRange(2, 2, body.length, 1).setFormulas(links);
+  return found.length + ' game' + (found.length === 1 ? '' : 's') + ' need attention. They are listed on the "' + PROBLEMS_TAB + '" tab; click a ROW number to jump to the game.';
+}
+
+// ---------- Back up the tabs ----------
+const BACKUP_KEEP = 8;
+
+function backupTabs() {
+  const ui = SpreadsheetApp.getUi();
+  const a = ui.alert('Back up the tabs', 'This copies the Steam and RetroAchievements tabs into new tabs named "Backup <date> <tab>". ' +
+    'The newest ' + BACKUP_KEEP + ' backup tabs are kept and older ones are removed. Continue?', ui.ButtonSet.OK_CANCEL);
+  if (a !== ui.Button.OK) return;
+  const r = withLock_(backupTabs_);
+  if (r) alert_(r);
+}
+
+function backupTabs_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const c = cfg_();
+  const stamp = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd HHmm');
+  const made = [];
+  [c.sheetName, c.raSheetName].forEach(n => {
+    const sh = ss.getSheetByName(n);
+    if (!sh || isBlankSheet_(sh)) return;
+    const copy = sh.copyTo(ss);
+    copy.setName(('Backup ' + stamp + ' ' + n).slice(0, 99));
+    made.push(copy.getName());
+  });
+  if (!made.length) return 'There is nothing to back up yet.';
+  const olds = ss.getSheets().map(x => x.getName()).filter(n => /^Backup \d{4}-\d{2}-\d{2} \d{4} /.test(n)).sort();
+  const drop = olds.slice(0, Math.max(0, olds.length - BACKUP_KEEP));
+  drop.forEach(n => { const x = ss.getSheetByName(n); if (x) ss.deleteSheet(x); });
+  return 'Backed up: ' + made.join(', ') + '.' + (drop.length ? '\n' + drop.length + ' older backup tab' + (drop.length === 1 ? ' was' : 's were') + ' removed.' : '');
+}
+
+// ---------- STATS tab ----------
+// A tab made only of live formulas (and charts) over the Steam and RetroAchievements tabs. Run it again to rebuild.
+const STATS_TAB = 'STATS';
+
+function buildStats() {
+  const r = withLock_(buildStats_);
+  if (r) alert_(r);
+}
+
+function buildStats_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const c = cfg_();
+  const q = n => "'" + String(n).replace(/'/g, "''") + "'";
+  // A game range from the first game row to just above the bottom totals row (or the end of the sheet).
+  const spec = name => {
+    const sh = ss.getSheetByName(name);
+    if (!sh || isBlankSheet_(sh)) return null;
+    const headers = headersOf_(sh), top = topRow_(sh);
+    const tr = totalsRowOf_(sh, headers);
+    const end = tr > top ? tr - 1 : Math.max(sh.getMaxRows(), top);
+    const rngI = i => q(name) + '!' + colLetter_(i) + top + ':' + colLetter_(i) + end;
+    const rng = h => { const i = headers.indexOf(h); return i < 0 ? null : rngI(i); };
+    const nameH = NAME_HEADERS.find(h => headers.indexOf(h) !== -1);
+    return { name: name, r: rng, rI: rngI, game: nameH ? rng(nameH) : null, headers: headers };
+  };
+  const st = spec(c.sheetName), ra = c.raOn || ss.getSheetByName(c.raSheetName) ? spec(c.raSheetName) : null;
+  if (!st && !ra) return 'There is no Steam or RetroAchievements tab to build statistics from yet.';
+
+  let sh = ss.getSheetByName(STATS_TAB);
+  if (sh) { sh.clear(); (sh.getCharts ? sh.getCharts() : []).forEach(ch => sh.removeChart(ch)); } else sh = ss.insertSheet(STATS_TAB);
+  const put = (row, a, b) => { sh.getRange(row, 1).setValue(a); if (b !== undefined) { const cell = sh.getRange(row, 2); if (String(b)[0] === '=') cell.setFormula(b); else cell.setValue(b); } };
+  const head = (row, text) => sh.getRange(row, 1, 1, 4).setValues([[text, '', '', '']]).setFontWeight('bold').setBackground('#e8eef7');
+  let row = 1;
+  sh.getRange(row, 1).setValue('STATS').setFontWeight('bold').setFontSize(14); row += 2;
+  const charts = [];
+
+  if (st) {
+    const done = st.r('collected achies'), tot = st.r('total achies'), hrs = st.r('hours played');
+    head(row++, 'STEAM (' + st.name + ')');
+    put(row++, 'Games on the list', '=COUNTA(' + st.game + ')');
+    if (done && tot) {
+      put(row++, 'Games at 100%', '=SUMPRODUCT(ISNUMBER(' + tot + ')*ISNUMBER(' + done + ')*(' + tot + '>0)*(' + done + '>=' + tot + '))');
+      const rCol = row; put(row++, 'Achievements collected', '=SUM(' + done + ')');
+      const rTot = row; put(row++, 'Achievements in total', '=SUM(' + tot + ')');
+      put(row++, 'Overall completion', '=IFERROR(B' + rCol + '/B' + rTot + ',0)');
+      sh.getRange(row - 1, 2).setNumberFormat('0.0%');
+    }
+    if (hrs) put(row++, 'Hours played', '=SUM(' + hrs + ')');
+    const statIdx = st.headers.findIndex(h => PLAY_STATUS_HEADERS.indexOf(h) !== -1);
+    const stat = statIdx < 0 ? null : st.rI(statIdx);
+    if (stat) {
+      row++; sh.getRange(row, 1, 1, 2).setValues([['BACKLOG STATUS', 'Games']]).setFontWeight('bold'); row++;
+      const first = row;
+      PLAY_STATES.forEach(w => { sh.getRange(row, 1).setValue(w); sh.getRange(row, 2).setFormula('=COUNTIF(' + stat + ',"' + w + '")'); row++; });
+      charts.push({ title: 'Games by backlog status', type: 'column', range: [first - 1, 1, PLAY_STATES.length + 1, 2], col: 6, atRow: 2, offY: 7 });
+    }
+    const gen = st.r('genre');
+    if (gen && done && tot) {
+      const amt = st.r('amount done');
+      row++; sh.getRange(row, 1, 1, 3).setValues([['TOP GENRES', 'Games', amt ? 'Average done' : '']]).setFontWeight('bold'); row++;
+      const f = amt
+        ? '=QUERY({' + gen + ',' + amt + '},"select Col1, count(Col1), avg(Col2) where Col1 <> \'\' group by Col1 order by count(Col1) desc limit 10 label Col1 \'\', count(Col1) \'\', avg(Col2) \'\'",0)'
+        : '=QUERY({' + gen + '},"select Col1, count(Col1) where Col1 <> \'\' group by Col1 order by count(Col1) desc limit 10 label Col1 \'\', count(Col1) \'\'",0)';
+      sh.getRange(row, 1).setFormula(f);
+      if (amt) sh.getRange(row, 3, 10, 1).setNumberFormat('0.0%');
+      charts.push({ title: 'Top genres (games)', type: 'bar', range: [row - 1, 1, 11, 2], col: 6, atRow: 20, offY: 0 });
+      row += 11;
+    }
+    row++;
+  }
+
+  if (ra) {
+    const done = ra.r('collected achies'), tot = ra.r('total achies'), dh = ra.r('collected hc achies'), th = ra.r('total hc achies');
+    head(row++, 'RETROACHIEVEMENTS (' + ra.name + ')');
+    put(row++, 'Games on the list', '=COUNTA(' + ra.game + ')');
+    if (done && tot) {
+      put(row++, 'Games at 100%', '=SUMPRODUCT(ISNUMBER(' + tot + ')*ISNUMBER(' + done + ')*(' + tot + '>0)*(' + done + '>=' + tot + '))');
+      const rCol = row; put(row++, 'Achievements collected', '=SUM(' + done + ')');
+      const rTot = row; put(row++, 'Achievements in total', '=SUM(' + tot + ')');
+      put(row++, 'Overall completion', '=IFERROR(B' + rCol + '/B' + rTot + ',0)');
+      sh.getRange(row - 1, 2).setNumberFormat('0.0%');
+    }
+    if (dh && th) {
+      put(row++, 'Games mastered (hardcore 100%)', '=SUMPRODUCT(ISNUMBER(' + th + ')*ISNUMBER(' + dh + ')*(' + th + '>0)*(' + dh + '>=' + th + '))');
+      put(row++, 'Hardcore achievements', '=SUM(' + dh + ')');
+    }
+    row++;
+  }
+
+  if (historyOn_() && ss.getSheetByName(HISTORY_TAB)) {
+    head(row++, 'PROGRESS OVER TIME');
+    sh.getRange(row, 1).setValue('The chart on the right comes from the "' + HISTORY_TAB + '" tab (one row per day).');
+    charts.push({ title: 'Achievements collected over time', type: 'line', hist: true, col: 6, atRow: 37, offY: 14 });
+  }
+
+  sh.setColumnWidth(1, 240);
+  sh.setFrozenRows(1);
+  try {
+    charts.forEach(ch => {
+      let b = sh.newChart();
+      b = ch.type === 'column' ? b.asColumnChart() : ch.type === 'bar' ? b.asBarChart() : b.asLineChart();
+      if (ch.hist) {                                            // whole columns, so the chart keeps growing as HISTORY gets new rows; row 1 holds the series names
+        const hs = ss.getSheetByName(HISTORY_TAB);
+        b = b.addRange(hs.getRange('A:B')).addRange(hs.getRange('F:F')).setNumHeaders(1);
+      }
+      else b = b.addRange(sh.getRange(ch.range[0], ch.range[1], ch.range[2], ch.range[3])).setNumHeaders(1);   // "Use row as headers" is on: the first row names the series
+      sh.insertChart(b.setPosition(ch.atRow, ch.col, 0, ch.offY || 0).setOption('title', ch.title).setOption('legend', { position: ch.hist ? 'bottom' : 'none' }).build());
+    });
+  } catch (e) { /* charts are optional */ }
+  return 'The "' + STATS_TAB + '" tab is ready. It is made of formulas, so it stays current; run this again after adding columns.';
 }
