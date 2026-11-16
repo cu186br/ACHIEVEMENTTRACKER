@@ -165,6 +165,7 @@ function buildMenu_() {
     .addItem('Add BACKLOG STATUS column', 'addPlayStatusColumn')
     .addItem('Add DATE COMPLETED column', 'addDateCompletedColumn')
     .addItem('Add totals to top', 'addTopTotals')
+    .addItem('Add GAMES TO BUY column', 'addBuyColumn')
     .addItem('Upgrade RetroAchievements columns (hardcore)', 'upgradeRetroLayout')
     .addSeparator()
     .addItem('Apply text alignment (all tabs)', 'applyFormatting')
@@ -175,6 +176,8 @@ function buildMenu_() {
     .addItem('Problems report', 'problemsReport')
     .addItem('Diagnose selected game', 'diagnoseGame')
     .addSeparator()
+    .addItem('Link GAMES TO BUY to the Steam store', 'linkGamesToBuy')
+    .addItem('Sort GAMES TO BUY A-Z', 'sortBuyColumn')
     .addItem('Import missing achievements (notes)', 'importMissingNotes')
     .addItem('Back up the tabs', 'backupTabs')
     .addSeparator()
@@ -537,9 +540,9 @@ function updateSteamSheet() { run_(false, false); }
 function updateAndPostNow() { run_(true, false); }
 function postWeeklyNow() { run_(false, true); }
 
-function withLock_(fn) {
+function withLock_(fn, waitMs) {
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(30000)) { alert_('Another Achievement Tracker task is running. Try again in a moment.'); return; }
+  if (!lock.tryLock(waitMs || 30000)) { alert_('Another Achievement Tracker task is running. Try again in a moment.'); return; }
   try { return fn(); } finally { lock.releaseLock(); }
 }
 
@@ -1703,8 +1706,30 @@ const SORT_LABELS = {
   doneNew: 'date completed (newest first)', doneOld: 'date completed (oldest first)'
 };
 
+// Google's spreadsheet service sometimes fails for a moment ("Service Spreadsheets failed", timeouts) on a big sheet; those are retried.
+function retry_(fn) {
+  let last;
+  for (let i = 0; i < 3; i++) {
+    try { return fn(); } catch (e) {
+      last = e;
+      if (!/service|timed out|try again|internal error|server error|unavailable/i.test(String(e && e.message))) throw e;
+      Utilities.sleep(2000 * (i + 1));
+    }
+  }
+  throw last;
+}
+
 function sortList_(kind) {
-  withLock_(() => {
+  const ran = withLock_(() => {
+    try { sortListLocked_(kind); } catch (e) {
+      alert_('Sorting did not finish: ' + (e && e.message ? e.message : e) + '\n\nNothing was lost: rows are only moved when the sort completes. If this keeps happening, run Tools > Problems report and send the message above.');
+    }
+    return true;
+  }, 120000);                                              // an update in progress can hold the lock for a while: wait for it
+}
+
+function sortListLocked_(kind) {
+  (() => {
     const sheet = targetSheet_();
     const headers = headersOf_(sheet);
     const H = h => headers.indexOf(h);
@@ -1768,16 +1793,16 @@ function sortList_(kind) {
     ordered.forEach((r, pos) => { rank[r.i] = [pos + 1]; });
 
     // A temporary key column right after the table carries the new order; then it is removed again.
-    sheet.insertColumnAfter(span.max + 1);
+    retry_(() => sheet.insertColumnAfter(span.max + 1));
     const helper = span.max + 2;
     try {
-      sheet.getRange(top, helper, numRows, 1).setValues(rank);
-      sheet.getRange(top, span.min + 1, numRows, helper - span.min).sort({ column: helper, ascending: true });
+      retry_(() => sheet.getRange(top, helper, numRows, 1).setValues(rank));
+      retry_(() => sheet.getRange(top, span.min + 1, numRows, helper - span.min).sort({ column: helper, ascending: true }));
     } finally {
-      sheet.deleteColumn(helper);
+      retry_(() => sheet.deleteColumn(helper));            // the temporary key column always goes again
     }
     alert_('Sorted "' + sheet.getName() + '" by ' + SORT_LABELS[kind] + '.');
-  });
+  })();
 }
 
 function settingSortRange() {
@@ -3501,4 +3526,142 @@ function buildStats_() {
     });
   } catch (e) { /* charts are optional */ }
   return 'The "' + STATS_TAB + '" tab is ready. It is made of formulas, so it stays current; run this again after adding columns.';
+}
+
+
+// ---------- GAMES TO BUY column ----------
+// A column where you type games you don't own yet. The button turns each name into a link to its Steam store page;
+// the text is never changed and nothing else is written to the column. It only touches a column headed GAMES TO BUY.
+const BUY_HEADER = 'GAMES TO BUY';
+const BUY_ID_HEADER = 'BUY APPID';   // optional column right next to GAMES TO BUY: filled with each game's Steam app id
+const BUY_URL = /^https:\/\/store\.steampowered\.com\/app\/(\d+)\//;
+
+function addBuyColumn() {
+  const r = withLock_(() => {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(cfg_().sheetName);
+    if (!sheet || isBlankSheet_(sheet)) return 'Set up the Steam tab first.';
+    const headers = headersOf_(sheet);
+    const bi = headers.indexOf(BUY_HEADER.toLowerCase());
+    const hasId = headers.indexOf(BUY_ID_HEADER.toLowerCase()) !== -1;
+    if (bi !== -1 && hasId) return 'The "' + sheet.getName() + '" tab already has the ' + BUY_HEADER + ' and ' + BUY_ID_HEADER + ' columns.';
+    let col = bi + 1;
+    let msg = '';
+    if (bi === -1) {
+      col = sheet.getLastColumn() + 2;                       // one empty column away from your table
+      sheet.getRange(1, col).setValue(BUY_HEADER);
+      try { sheet.getRange(1, 1).copyTo(sheet.getRange(1, col), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false); } catch (e) { /* plain header */ }
+      msg = 'Added a ' + BUY_HEADER + ' column (column ' + colLetter_(col - 1) + '). ';
+    }
+    if (!hasId) {
+      sheet.insertColumnAfter(col);                          // a new column right after GAMES TO BUY
+      sheet.getRange(1, col + 1).setValue(BUY_ID_HEADER);
+      try { sheet.getRange(1, 1).copyTo(sheet.getRange(1, col + 1), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false); } catch (e) { /* plain header */ }
+      msg += 'Added a ' + BUY_ID_HEADER + ' column next to it (columns to the right moved over by one). ';
+    }
+    return msg + 'Type game names under ' + BUY_HEADER + ', then run Tools > Link GAMES TO BUY to the Steam store.';
+  });
+  if (r) alert_(r);
+}
+
+function linkGamesToBuy() {
+  let r;
+  try { r = withLock_(() => { RUN_T0 = Date.now(); return linkGamesToBuy_(); }); }
+  catch (e) { r = 'Linking GAMES TO BUY stopped with an error:\n\n' + (e && e.message ? e.message : e) + (e && e.stack ? '\n\n' + String(e.stack).split('\n').slice(0, 3).join('\n') : ''); }
+  if (r) alert_(r);
+}
+
+function linkGamesToBuy_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(cfg_().sheetName);
+  if (!sheet || isBlankSheet_(sheet)) return 'There is no Steam tab to work on.';
+  const headers = headersOf_(sheet);
+  const i = headers.indexOf(BUY_HEADER.toLowerCase());
+  if (i < 0) return 'The "' + sheet.getName() + '" tab has no ' + BUY_HEADER + ' column. Add one with Sheet setup > Add GAMES TO BUY column, or put the header ' + BUY_HEADER + ' in row 1.';
+  const top = topRow_(sheet), n = sheet.getLastRow() - top + 1;
+  if (n < 1) return 'The ' + BUY_HEADER + ' column is empty.';
+  const props = PropertiesService.getScriptProperties();
+  const map = loadJson_(props, 'BUY_MAP') || {};          // normalised name -> [appid or 0 (not found), time, store name]
+  const range = sheet.getRange(top, i + 1, n, 1);
+  const rich = range.getRichTextValues();
+  const notes = range.getNotes();
+  const ii = headers.indexOf(BUY_ID_HEADER.toLowerCase());          // optional app id column
+  const idRange = ii >= 0 ? sheet.getRange(top, ii + 1, n, 1) : null;
+  const ids = idRange ? idRange.getValues() : null;
+  let idsChanged = false;
+  const nowSec = Math.floor(Date.now() / 1000);
+  let byId = 0, searches = 0, linked = 0, already = 0, skippedOwn = 0, left = 0, changed = false, notesChanged = false, mapChanged = false;
+  const notFound = [], closest = [];
+  for (let k = 0; k < n; k++) {
+    const text = String(rich[k][0].getText()).trim();
+    if (!text) continue;
+    const link = String(rich[k][0].getLinkUrl() || '');
+    if (link && !BUY_URL.test(link)) { skippedOwn++; continue; }          // a link you added yourself: left alone
+    const key = norm_(text);
+    if (!key) continue;
+    let e = map[key];
+    if (!e || (e[0] === 0 && nowSec - e[1] > STORE_MISS_SEC)) {
+      if (overBudget_()) { left++; continue; }
+      if (searches++ > 0) Utilities.sleep(700);                            // the Steam store limits how fast it can be asked
+      let hit = null, ok = true;
+      try { hit = retry_(() => storeSearch_(text)); } catch (err) { ok = false; }
+      if (!ok) { left++; continue; }
+      e = hit ? [hit.id, nowSec, hit.name] : [0, nowSec, ''];
+      map[key] = e; mapChanged = true;
+    }
+    if (!e[0]) {
+      // Not found by name: fall back to the app id typed in the BUY APPID column, if there is one.
+      const typed = ids ? Math.floor(Number(ids[k][0])) : 0;
+      if (typed > 0) {
+        const urlId = 'https://store.steampowered.com/app/' + typed + '/';
+        if (link !== urlId) { rich[k][0] = rich[k][0].copy().setLinkUrl(urlId).build(); changed = true; linked++; } else already++;
+        byId++;
+        const cur2 = String(notes[k][0]);
+        const want2 = STATUS_NOTE + 'linked using the app id ' + typed + ' (the name was not found on the store).';
+        if ((cur2 === '' || STATUS_NOTE_OLD.test(cur2)) && cur2 !== want2) { notes[k][0] = want2; notesChanged = true; }
+      } else notFound.push(text);
+      continue;
+    }
+    const url = 'https://store.steampowered.com/app/' + e[0] + '/';
+    if (link === url) already++;
+    else { rich[k][0] = rich[k][0].copy().setLinkUrl(url).build(); changed = true; linked++; }
+    if (ids && (ids[k][0] === '' || link !== url) && ids[k][0] !== e[0]) { ids[k][0] = e[0]; idsChanged = true; }   // fill when empty, or when the link just changed
+    // A name that is not exactly the store's name gets a note, so a wrong match is easy to spot.
+    const exact = norm_(e[2]) === key;
+    if (!exact) closest.push(text + ' → ' + e[2]);
+    const want = exact ? '' : STATUS_NOTE + 'linked to the closest store match: ' + e[2] + '. Check it is the right game.';
+    const cur = String(notes[k][0]);
+    if ((cur === '' || STATUS_NOTE_OLD.test(cur)) && cur !== want) { notes[k][0] = want; notesChanged = true; }
+  }
+  if (changed) range.setRichTextValues(rich);
+  if (notesChanged) range.setNotes(notes);
+  if (idsChanged) idRange.setValues(ids);
+  if (mapChanged) {
+    const keys = Object.keys(map);
+    if (keys.length > 800) keys.slice(0, keys.length - 800).forEach(x => delete map[x]);   // keep the saved list small
+    saveJson_(props, 'BUY_MAP', map);
+  }
+  const list = (a, max) => a.slice(0, max).join(', ') + (a.length > max ? ' …and ' + (a.length - max) + ' more' : '');
+  return 'Linked ' + linked + ' game' + (linked === 1 ? '' : 's') + ' in ' + BUY_HEADER + (already ? ' (' + already + ' already linked)' : '') + '.' +
+    (byId ? '\n\n' + byId + ' linked by the app id in ' + BUY_ID_HEADER + ' because the name was not found.' : '') +
+    (closest.length ? '\n\nClosest matches (hover the cell to check): ' + list(closest, 8) : '') +
+    (notFound.length ? '\n\nNot found on the Steam store: ' + list(notFound, 10) : '') +
+    (skippedOwn ? '\n\n' + skippedOwn + ' cell' + (skippedOwn === 1 ? ' has' : 's have') + ' a link you added, so ' + (skippedOwn === 1 ? 'it was' : 'they were') + ' left alone.' : '') +
+    (left ? '\n\n' + left + ' names are still to do (the Steam store limits requests). Run it again to finish.' : '');
+}
+
+// Sorts only the GAMES TO BUY column, A-Z. The rest of the sheet does not move; links and notes travel with their names.
+function sortBuyColumn() {
+  const r = withLock_(() => {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(cfg_().sheetName);
+    if (!sheet || isBlankSheet_(sheet)) return 'There is no Steam tab to work on.';
+    const i = headersOf_(sheet).indexOf(BUY_HEADER.toLowerCase());
+    if (i < 0) return 'The "' + sheet.getName() + '" tab has no ' + BUY_HEADER + ' column. Add one with Sheet setup > Add GAMES TO BUY column.';
+    const top = topRow_(sheet);                                  // skips the header and a totals row
+    const n = sheet.getLastRow() - top + 1;
+    if (n < 2) return 'There is nothing to sort in ' + BUY_HEADER + '.';
+    const hd = headersOf_(sheet);
+    const withId = hd[i + 1] === BUY_ID_HEADER.toLowerCase();       // the app ids move with their names
+    retry_(() => sheet.getRange(top, i + 1, n, withId ? 2 : 1).sort({ column: i + 1, ascending: true }));
+    return 'Sorted ' + BUY_HEADER + ' A-Z. Blank cells are at the bottom.';
+  });
+  if (r) alert_(r);
 }
