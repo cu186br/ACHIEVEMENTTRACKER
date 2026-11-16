@@ -16,7 +16,12 @@ No server, hosting or install is needed. Everything runs for free inside Google 
 - **Auto-update:** every 1 to 30 minutes, set from the menu.
 - **Discord posts** (all optional): last played with the names and descriptions of new achievements, 🏆 100% completions, and a 📅 weekly summary.
 - **Backlog status:** an optional column (COMPLETED, IDLE, ACTIVE, BACKLOG) filled in automatically.
-- **Sorting:** A to Z, Z to A, completion %, hours, last played, genre, backlog status, date completed.
+- **Sorting:** A to Z, Z to A, completion %, total achievements, hours, last played, genre, two backlog orders, date completed.
+- **Missing achievements:** a note on each unfinished game's COLLECTED ACHIES cell lists what you still need, easiest first, with the share of players who have each one.
+- **Archived achievements:** achievements Steam has retired are kept out of a game's total when you hold more than the public total.
+- **Rare achievement posts:** a Discord post when you unlock an achievement few players have.
+- **STATS, HISTORY, PROBLEMS:** a live statistics tab with charts, a daily log of your progress, and a one-click list of games that need attention.
+- **Safety net:** a backup button, a Discord warning when updates fail, and updates that stop cleanly before Google's time limit.
 - **RetroAchievements:** an optional second tab, including games you haven't played yet.
 - **Self-setting-up:** on a blank sheet it builds the headers, formulas, colours and totals row. New rows get their formulas copied down, and **Add game rows** extends the list.
 - **Cell update rules:** choose, column by column, whether the script overwrites a cell or keeps what you typed.
@@ -90,15 +95,16 @@ Run **Achievement Tracker → Settings → Updates → Auto-update**. It default
 | **Update now**, **Update + post last played to Discord**, **Post weekly summary now (preview)** | The everyday actions. |
 | **Sort the list** | The sort options and the sort range. |
 | **Add games** | Import Steam library games with achievements, Import RetroAchievements Want to Play list, Add game rows. |
-| **Sheet setup** | Set up blank sheet, Set up RetroAchievements tab, Add BACKLOG STATUS / DATE COMPLETED columns, Add totals row under the header, Upgrade RetroAchievements columns (hardcore). |
-| **Tools** | Diagnose selected game, Send test 100% post to Discord. |
+| **Sheet setup** | Set up blank sheet, Set up RetroAchievements tab, Add BACKLOG STATUS / DATE COMPLETED columns, Add totals to top, Upgrade RetroAchievements columns (hardcore), Apply text alignment (all tabs), and an **Optional tabs** submenu: Build STATS tab and the Progress history switch. |
+| **Tools** | Problems report and Diagnose selected game; Import missing achievements (notes) and Back up the tabs; Send test 100% post to Discord. |
 | **Settings → Accounts** | Steam API key and ID, RetroAchievements username and key, Discord webhook. |
 | **Settings → Updates** | Auto-update on/off and frequency (1, 5, 10, 15 or 30 min), how long a recently played game keeps being re-checked, and how often family-shared and free-to-play games are re-checked (default every 60 minutes; Steam reports no playtime for them, so they run on a timer). |
 | **Settings → Sheets & columns** | Steam tab name, rows on a new sheet, store links, genre and status columns. Turning **Link game names** off removes the Steam links the script added and resets those names to plain text (links you added yourself are left alone). |
+| **Settings → Steam achievement data** | Missing achievements note on/off, leave archived achievements out of the total on/off. |
 | **Settings → RetroAchievements** | Track RetroAchievements on/off, tab name, auto-add Want to Play games. |
 | **Settings → Backlog status** | The IDLE cutoff and the status colours. |
 | **Settings → Cell update rules** | Overwrite or keep your edits, per column. |
-| **Settings → Discord** | Last-played, 100% and weekly posts, and the weekly day and hour. |
+| **Settings → Discord** | Last-played, 100%, rare-achievement and weekly posts, the rarity limit, failure warnings, and the weekly day and hour. |
 | **Settings → Show all settings / Reset** | Lists every setting, or restores the defaults. |
 
 Settings are saved with the script, so pasting in a newer version of the code doesn't reset them.
@@ -156,15 +162,16 @@ The script never removes chips, dropdowns or colours you add yourself, and **Add
 **Achievement Tracker → Sort the list** offers:
 
 - A to Z and Z to A.
-- Completion % (highest or lowest first), hours played (most first), last played (newest first), genre.
-- **Backlog status, then A to Z:** groups the list in the order BACKLOG, ACTIVE, IDLE, COMPLETED, each group A to Z. Rows with no status go last. Needs the BACKLOG STATUS column.
+- Completion % (highest or lowest first), **total achievements (most or least first)**, hours played (most first), last played (newest first), genre.
+- **Backlog/Idle/Active/A-Z:** groups the list BACKLOG, IDLE, ACTIVE, then COMPLETED, each group A to Z. Rows with no status go last. Needs the BACKLOG STATUS column.
+- **Active/Idle/Backlog/A-Z:** the same idea with active games first: ACTIVE, IDLE, BACKLOG, then COMPLETED.
 - **Date completed (newest or oldest first):** needs the DATE COMPLETED column. Games without a date go last.
 
 Sorting only reorders the game table, so lists next to it and the totals row are never moved. Rows without data go last. **Sort range** limits the sort to columns you choose, for example `A:L`. Use these instead of Google Sheets' own sort or filter, which reorders the whole sheet and breaks things.
 
 ## Totals row under the header
 
-**Sheet setup → Add totals row under the header** adds a bold `TOTALS` row directly below the header that mirrors the totals row at the bottom of the list, and freezes it so the totals stay in view while you scroll. Do it once per tab (run it while looking at the tab you want; it needs the totals row at the bottom to already exist, which blank-sheet setup creates).
+**Sheet setup → Add totals to top** adds a bold `TOTALS` row directly below the header that mirrors the totals row at the bottom of the list, and freezes it so the totals stay in view while you scroll. Do it once per tab (run it while looking at the tab you want; it needs the totals row at the bottom to already exist, which blank-sheet setup creates).
 
 - Everything below the header moves down by one row, so your games start on **row 3**. The script finds the first game row by itself, so updating, sorting, importing, adding rows, the BACKLOG STATUS column and Discord posts all keep working. Formulas you wrote yourself that point at specific rows are adjusted by Google Sheets as usual.
 - Don't type games into the `TOTALS` row, and leave the label as `TOTALS` so the script can recognise it.
@@ -225,6 +232,33 @@ Columns are aligned for readability: COLLECTED ACHIES, TOTAL ACHIES, COMPLETED, 
 
 The RetroAchievements tab carries over Discord posts (last played, 100% completion which says *Mastered in hardcore* when it applies), the weekly summary, sorting, update rules and totals. It has no store links, AppID, hours or STATUS column.
 
+## Missing achievements notes
+
+Hover over a game's **COLLECTED ACHIES** cell to see the achievements you are still missing: name, description and, in brackets, the percent of players who have it. The list is sorted with the most common first, so the easy ones are on top. A note holds up to 20,000 characters; a very long list ends with "…and N more". Completed games have no note, and a note you wrote yourself is never replaced.
+
+- Notes are refreshed whenever a game is checked. **Tools → Import missing achievements (notes)** fills them in for every game at once (and turns the setting on). It makes several passes on a long list and tells you if some games still need a second run.
+- Turn the notes off under **Settings → Steam achievement data → Missing achievements note**. This also removes the notes the script made.
+- Steam only. Hidden achievements may have no description.
+
+## Archived achievements
+
+Steam can retire ("archive") a game's achievements. Players who earned them keep them, but they no longer count toward the game's total. When your collected count is **higher than the game's public total** (shown on its store page), the script treats the difference as archived: TOTAL ACHIES shows the public total, COLLECTED ACHIES keeps what you earned (so it can read 61 / 57), the game counts as 100% when collected reaches the total, and a note on the total cell says how many are archived. Games where collected is not above the public total are left exactly as Steam reports them. Turn it off under **Settings → Steam achievement data**. It needs a store lookup per game (checked again every 7 days, 60 games per update); **Import missing achievements (notes)** catches up the whole list.
+
+## Problems report
+
+**Tools → Problems report** lists every game that needs attention on the Steam and RetroAchievements tabs (not owned, check match, retrying, no stats, not found on RetroAchievements and so on) on a **PROBLEMS** tab, with the reason and a link to the row. Run it again to refresh; with no problems the tab is emptied.
+
+## STATS tab and progress history
+
+Both are optional and are never created by an update; you set them up from **Sheet setup → Optional tabs**.
+
+- **Build STATS tab** builds a **STATS** tab made of live formulas: games at 100%, collected and total achievements, overall completion, hours, games per backlog status, top genres with average completion, RetroAchievements totals and hardcore mastered games, plus charts. Run it again to rebuild (for example after adding columns).
+- **Progress history** (switch it on under Optional tabs) creates a **HISTORY** tab the script keeps itself: one row per day with your collected and total achievements, games at 100% and hours (Steam), and the same for RetroAchievements. The day's last update wins. It feeds the progress chart on STATS. Switch it off in the same submenu; the tab is kept but no longer updated. A HISTORY tab that already exists keeps logging until you switch it off.
+
+## Back up the tabs
+
+**Tools → Back up the tabs** copies the Steam and RetroAchievements tabs into tabs named `Backup <date and time> <tab>`. The newest 8 backup tabs are kept and older ones are removed. Worth doing before a big import, sort or format.
+
 ## Test the 100% post
 
 **Tools → Send test 100% post to Discord** sends a sample 100% post so you can see the cover and layout. It uses a finished game from your sheet (one per tab if both tabs have one), or an example game if nothing is finished yet. The title is marked **TEST**, and nothing is recorded, so real posts and the weekly summary are not affected. If Discord rejects it, the script tells you to set the webhook again.
@@ -234,6 +268,8 @@ The RetroAchievements tab carries over Discord posts (last played, 100% completi
 - **Last played:** after a game's hours change, it posts the game, total hours, achievements, and the number gained since the last post for that game.
 - **New achievements:** the post lists each achievement you earned, with its name and description, as a list when there are several (up to 10 shown, then "…and N more"). It works for Steam and RetroAchievements. Achievements you earned before the script first saw the game are not listed, and hidden Steam achievements may have no description. If an update catches several games at once, each game's achievements are held and listed in that game's next post.
 - **100% complete:** a post when a game reaches every achievement, with the game's cover image (Steam's header image, or the game icon for RetroAchievements) and the final achievements you earned listed. Games already at 100% when you first set it up are not announced.
+- **Rare achievements (Steam):** a short post for an achievement you just unlocked that fewer than 5% of players have (change the limit under **Settings → Discord**). At most the 3 rarest are posted per update.
+- **Failure warning:** if an update fails (a wrong key, a private profile, Steam down), one short warning is posted, at most once every 6 hours. Turn it off under **Settings → Discord**.
 - **Weekly summary:** hours played, achievements gained, top games, anything completed that week, and your sheet-wide totals. It only counts the games on your sheet, and games you add mid-week count from the day you add them. It needs auto-update on.
 
 ## How it works
@@ -263,10 +299,12 @@ The STATUS column holds a short label. **Hover over the cell** for a note explai
 | `No achievements` | Steam says the game has none. Any numbers already on the sheet are kept. |
 | `No stats` | Steam returned no stats for a game you have played. Your existing numbers are kept. |
 | `Not owned or private` | Steam returned no data for the game: either you don't have it, or your Steam **Profile** and **Game details** are private. If you own it, set both to Public in Steam's privacy settings. |
-| `Retrying` | Steam was busy or returned an error (the note shows the code). It retries on the next update. HTTP 403 usually means a wrong API key: enter it again under **Accounts**. |
+| `Retrying` | Steam was busy or returned an error (the note shows the code), or the update ran out of time on a very long list. It retries on the next update. HTTP 403 usually means a wrong API key: enter it again under **Accounts**. |
 
 **Other problems**
 
+- **Many games to check:** run **Tools → Problems report** to see them all in one list.
+- **A RetroAchievements subset or hack isn't found:** see the note on its name cell; it lists the subsets of that game. Type the title as it appears on retroachievements.org.
 - **The menu doesn't appear:** reload the sheet and wait about 10 seconds. If it still doesn't, run `onOpen` once from the Apps Script editor.
 - **"Steam returned no games":** your Game details are not public, or the Steam ID or API key is wrong.
 - **An achievement was just unlocked but hasn't shown up:** Steam can lag by a few minutes, and the script re-checks recently played games on every update. Playing offline may delay it until Steam syncs.
@@ -278,7 +316,7 @@ The STATUS column holds a short label. **Hover over the cell** for a note explai
 
 ## Limits
 
-Google Apps Script has daily quotas. A normal list updates well within them, but if you track thousands of games or run it every minute you may reach them. Steam's and RetroAchievements' web APIs limit very fast request bursts, which the script handles by pausing and retrying.
+Google Apps Script has daily quotas. A normal list updates well within them, but if you track thousands of games or run it every minute you may reach them. Steam's and RetroAchievements' web APIs limit very fast request bursts, which the script handles by pausing and retrying. A run stops fetching after about 4.5 minutes so Google's 6 minute limit never cuts it off; games it didn't reach show `Retrying` and are done on the next update. Discord posts that hit Discord's rate limit are retried, and a 100% post Discord rejects is sent again on the next update.
 
 ## Privacy and security
 
@@ -289,7 +327,3 @@ Google Apps Script has daily quotas. A normal list updates well within them, but
 ## Updating
 
 Replace the code in **Extensions → Apps Script** with the newer `SteamTracker.gs`, save, and reload the sheet. Your settings and saved details are kept. See `CHANGELOG.md` for what changed.
-
-## License
-
-Add the license of your choice here, for example MIT.
