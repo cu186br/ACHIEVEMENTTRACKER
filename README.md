@@ -95,8 +95,8 @@ Run **Achievement Tracker → Settings → Updates → Auto-update**. It default
 | **Update now**, **Update + post last played to Discord**, **Post weekly summary now (preview)** | The everyday actions. |
 | **Sort the list** | The sort options and the sort range. |
 | **Add games** | Import Steam library games with achievements, Import RetroAchievements Want to Play list, Add game rows. |
-| **Sheet setup** | Set up blank sheet, Set up RetroAchievements tab, Add BACKLOG STATUS / DATE COMPLETED columns, Add totals to top, Upgrade RetroAchievements columns (hardcore), Apply text alignment (all tabs), and an **Optional tabs** submenu: Build STATS tab and the Progress history switch. |
-| **Tools** | Problems report and Diagnose selected game; Import missing achievements (notes) and Back up the tabs; Send test 100% post to Discord. |
+| **Sheet setup** | Set up blank sheet, Set up RetroAchievements tab, Add BACKLOG STATUS / DATE COMPLETED columns, Add totals to top, Add GAMES TO BUY column, Upgrade RetroAchievements columns (hardcore), Apply text alignment (all tabs), and an **Optional tabs** submenu: Build STATS tab and the Progress history switch. |
+| **Tools** | Problems report and Diagnose selected game; Link GAMES TO BUY to the Steam store and Sort GAMES TO BUY A-Z; Import missing achievements (notes) and Back up the tabs; Send test 100% post to Discord. |
 | **Settings → Accounts** | Steam API key and ID, RetroAchievements username and key, Discord webhook. |
 | **Settings → Updates** | Auto-update on/off and frequency (1, 5, 10, 15 or 30 min), how long a recently played game keeps being re-checked, and how often family-shared and free-to-play games are re-checked (default every 60 minutes; Steam reports no playtime for them, so they run on a timer). |
 | **Settings → Sheets & columns** | Steam tab name, rows on a new sheet, store links, genre and status columns. Turning **Link game names** off removes the Steam links the script added and resets those names to plain text (links you added yourself are left alone). |
@@ -176,6 +176,18 @@ Sorting only reorders the game table, so lists next to it and the totals row are
 - Everything below the header moves down by one row, so your games start on **row 3**. The script finds the first game row by itself, so updating, sorting, importing, adding rows, the BACKLOG STATUS column and Discord posts all keep working. Formulas you wrote yourself that point at specific rows are adjusted by Google Sheets as usual.
 - Don't type games into the `TOTALS` row, and leave the label as `TOTALS` so the script can recognise it.
 - To remove it, delete the row and unfreeze it (**View → Freeze → 1 row**).
+
+## GAMES TO BUY column
+
+A column for games you want but don't own yet. Type the names under a header called **GAMES TO BUY**, then run **Tools → Link GAMES TO BUY to the Steam store**. Each name becomes a link to its Steam store page.
+
+- **Sheet setup → Add GAMES TO BUY column** adds the header for you (one empty column away from your table). If you already have a column with that header, it is used as is.
+- **BUY APPID** (optional): Add GAMES TO BUY column also adds this column right next to it (columns to the right move over by one). Linking fills it with each game's Steam app id. It fills empty cells and cells whose link just changed, so an id you type or fix by hand is kept. Sorting moves the ids with their names. If a name can't be found on the store, the link is built from the app id in this column instead (the cell gets a note saying so), so you can type an id for games the search misses.
+- Only the text is kept: names are never changed and nothing else is written to the column.
+- If the store's name is not exactly what you typed, the cell gets a note saying which game it linked to, so a wrong match is easy to spot.
+- Links you added yourself are left alone. Names not found on the store are listed in the result.
+- **Tools → Sort GAMES TO BUY A-Z** sorts just this column (A-Z, blanks last). The rest of the sheet doesn't move, and links and notes stay with their names.
+- Lookups use the official Steam store search. They are remembered, so running it again only searches new names. Big lists finish over a few runs.
 
 ## Importing your library
 
