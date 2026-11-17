@@ -1,7 +1,7 @@
 // ---------- Settings ----------
 // Defaults. Everything here can be changed from Achievement Tracker > Settings.
 const DEFAULTS = {
-  sheetName: 'Sheet1',   // tab to update (falls back to the first tab if it isn't found)
+  sheetName: 'STEAM',    // tab to update (falls back to the first tab if it isn't found)
   autoMinutes: 15,       // auto-update frequency; Google allows 1, 5, 10, 15 or 30
   sharedMinutes: 60,     // Family-shared and free-to-play games (no playtime from Steam) are re-checked at most this often
   recentHours: 6,        // games played within this many hours are always re-checked (catches mid-session achievements)
@@ -20,7 +20,7 @@ const DEFAULTS = {
   weeklyHour: 20,        // 0-23
   autoOn: false,         // remembers whether auto-update was turned on from the menu
   raOn: false,           // RetroAchievements on a second tab
-  raSheetName: 'RetroAchievements',
+  raSheetName: 'RETRO',
   raWantAuto: false,     // RetroAchievements: add new games from your Want to Play list to the tab on every update
   statusColours: false,  // BACKLOG STATUS column: colour the cells (conditional formatting managed by the script)
   statusColourMap: { COMPLETED: '#d9d2e9', ACTIVE: '#d9ead3', IDLE: '#ffe599', BACKLOG: '#f4cccc' },
@@ -71,11 +71,38 @@ const OUT_COLS = {
 
 // ---------- Menu & settings ----------
 
+// ---------- Tabs ----------
+// Every part of the script finds its tabs through these, so a tab is always looked up the same way.
+const OWN_TABS = ['STATS', 'PROBLEMS', 'HISTORY'];
+// The Steam tab: the tab with the saved name, or (like the updater) the first tab that isn't one of ours if that name isn't found.
+function steamSheet_(ss) {
+  const c = cfg_();
+  return ss.getSheetByName(c.sheetName) ||
+    ss.getSheets().filter(x => x.getName() !== c.raSheetName && OWN_TABS.indexOf(x.getName()) === -1)[0] || ss.getSheets()[0];
+}
+// The RetroAchievements tab, or null if there isn't one.
+function retroSheet_(ss) { return ss.getSheetByName(cfg_().raSheetName); }
+// A tab by name, with the Steam tab's first-tab fallback.
+function tabOf_(ss, name) { return name === cfg_().sheetName ? steamSheet_(ss) : ss.getSheetByName(name); }
+
+// Settings are read once per run (a run is one menu click or trigger) and again after they are changed.
+let CFG_CACHE = null;
 function cfg_() {
+  if (!CFG_CACHE) CFG_CACHE = readCfg_();
+  return Object.assign({}, CFG_CACHE);
+}
+function readCfg_() {
   try {
     const raw = PropertiesService.getScriptProperties().getProperty('SETTINGS');
     const c = Object.assign({}, DEFAULTS, raw ? JSON.parse(raw) : {});
     c.keep = Object.assign({}, DEFAULTS.keep, c.keep || {});
+    // Earlier versions called the RetroAchievements tab "RetroAchievements". If that tab exists and the name was never saved, keep using it.
+    if (!(raw && JSON.parse(raw).raSheetName !== undefined)) {
+      try {
+        const ssx = SpreadsheetApp.getActiveSpreadsheet();
+        if (ssx && !ssx.getSheetByName('RETRO') && ssx.getSheetByName('RetroAchievements')) c.raSheetName = 'RetroAchievements';
+      } catch (e) { /* no spreadsheet open */ }
+    }
     if (c.idleMonths !== undefined && !(raw && JSON.parse(raw).idleAmount !== undefined)) { c.idleAmount = c.idleMonths; c.idleUnit = 'months'; }   // setting from earlier versions
     const saved = Object.assign({}, c.statusColourMap || {});
     if (saved.PLAYED !== undefined) { if (saved.ACTIVE === undefined) saved.ACTIVE = saved.PLAYED; delete saved.PLAYED; }   // PLAYED was renamed ACTIVE
@@ -94,6 +121,7 @@ function setCfg_(patch) {
   let saved = {};
   try { saved = JSON.parse(props.getProperty('SETTINGS') || '{}'); } catch (e) { /* start fresh */ }
   props.setProperty('SETTINGS', JSON.stringify(Object.assign(saved, patch)));
+  CFG_CACHE = null;
 }
 
 // IDLE threshold helpers: "6 months", "3 weeks", "10 days" (0 = never).
@@ -166,6 +194,7 @@ function buildMenu_() {
     .addItem('Add DATE COMPLETED column', 'addDateCompletedColumn')
     .addItem('Add totals to top', 'addTopTotals')
     .addItem('Add GAMES TO BUY column', 'addBuyColumn')
+    .addItem('Rename tabs to STEAM and RETRO', 'renameTabs')
     .addItem('Upgrade RetroAchievements columns (hardcore)', 'upgradeRetroLayout')
     .addSeparator()
     .addItem('Apply text alignment (all tabs)', 'applyFormatting')
@@ -285,22 +314,37 @@ function toggle_(key, label) {
 }
 // Button: fills the missing-achievements note on COLLECTED ACHIES for every Steam game now (normally a game's note is
 // refreshed when the game is next checked). Turns the notes setting on.
+let raLeftAfter_ = 0, raErr_ = '';
 function importMissingNotes() {
+  raErr_ = '';
   const ui = SpreadsheetApp.getUi();
   const a = ui.alert('Import missing achievements',
-    'This checks every game on the Steam tab and puts the achievements you are still missing (name and description) into a note on its COLLECTED ACHIES cell.\n\n' +
+    'This checks every game on the Steam tab (and the RetroAchievements tab, if it is turned on) and puts the achievements you are still missing (name and description) into a note on its COLLECTED ACHIES cell.\n\n' +
     'It can take a while on a long list. It does not post anything to Discord. Continue?', ui.ButtonSet.OK_CANCEL);
   if (a !== ui.Button.OK) return;
   if (!cfg_().missingNotes) { setCfg_({ missingNotes: true }); buildMenu_(); }
   const t0 = Date.now();
   const r = withLock_(() => {
     RUN_T0 = t0;
-    updateSteam_(true, true);
-    // The Steam store limits how fast archived-achievement totals can be looked up, so a long list needs a few passes.
-    for (let pass = 1; pass < 6 && archLeft_ > 0 && Date.now() - t0 < 200000; pass++) { Utilities.sleep(30000); updateSteam_(true, true); }
+    let steamErr = '';
+    try {
+      updateSteam_(true, true);
+      // The Steam store limits how fast archived-achievement totals can be looked up, so a long list needs a few passes.
+      for (let pass = 1; pass < 6 && archLeft_ > 0 && Date.now() - t0 < 200000; pass++) { Utilities.sleep(30000); updateSteam_(true, true); }
+    } catch (e) { steamErr = String(e && e.message || e); }
+    raLeftAfter_ = 0;
+    if (cfg_().raOn) {
+      try {
+        for (let pass = 0; pass < 6 && Date.now() - t0 < 230000; pass++) { updateRetro_(true, true); if (raNotesLeft_ === 0) break; RUN_T0 = Date.now(); }
+        raLeftAfter_ = raNotesLeft_;
+      } catch (e) { if (steamErr) throw e; steamErr = ''; raErr_ = String(e && e.message || e); }
+    }
+    if (steamErr && !cfg_().raOn) throw new Error(steamErr);
     return true;
   });
-  if (r) alert_('Done. Hover over a COLLECTED ACHIES cell to see the missing achievements. Games you have completed have no note.' +
+  if (r) alert_('Done. Hover over a COLLECTED ACHIES cell to see the missing achievements (Steam and RetroAchievements tabs). Games you have completed have no note.' +
+    (raLeftAfter_ > 0 ? '\n\n' + raLeftAfter_ + ' RetroAchievements games still need their note (RetroAchievements limits how fast it can be asked). Run this again to finish them.' : '') +
+    (raErr_ ? '\n\nThe RetroAchievements tab could not be done: ' + raErr_ : '') +
     (archLeft_ > 0 ? '\n\n' + archLeft_ + ' games still need their archived-achievement check (the Steam store limits requests). Run this again in a few minutes to finish them.' : ''));
 }
 
@@ -316,16 +360,20 @@ function toggleMissingNotes() {
   setCfg_({ missingNotes: !wasOn });
   buildMenu_();
   if (wasOn) {                                           // switching off removes the notes the script made
-    const sheet = targetSheet_();
-    const headers = headersOf_(sheet), idx = headers.indexOf('collected achies');
-    const n = trimGameRows_(sheet, headers.findIndex(h => NAME_HEADERS.indexOf(h) !== -1));
-    if (idx >= 0 && n > 0) {
-      const r = sheet.getRange(topRow_(sheet), idx + 1, n, 1);
-      const notes = r.getNotes();
-      let changed = false;
-      notes.forEach(x => { if (String(x[0]).indexOf(MISS_NOTE) === 0) { x[0] = ''; changed = true; } });
-      if (changed) r.setNotes(notes);
-    }
+    const ss0 = SpreadsheetApp.getActiveSpreadsheet();
+    [cfg_().sheetName, cfg_().raSheetName].forEach(tn => {
+      const sheet = tabOf_(ss0, tn);
+      if (!sheet || isBlankSheet_(sheet)) return;
+      const headers = headersOf_(sheet), idx = headers.indexOf('collected achies');
+      const n = trimGameRows_(sheet, headers.findIndex(h => NAME_HEADERS.indexOf(h) !== -1));
+      if (idx >= 0 && n > 0) {
+        const r = sheet.getRange(topRow_(sheet), idx + 1, n, 1);
+        const notes = r.getNotes();
+        let changed = false;
+        notes.forEach(x => { if (String(x[0]).indexOf(MISS_NOTE) === 0) { x[0] = ''; changed = true; } });
+        if (changed) r.setNotes(notes);
+      }
+    });
     alert_('Missing achievements notes are OFF and the existing ones were removed.');
   } else alert_('Missing achievements notes are ON. They appear on COLLECTED ACHIES at the next update.');
 }
@@ -343,7 +391,7 @@ function toggleLinkNames() {
 // and resets the text style of those cells, so the names look like plain text again.
 function removeNameLinks_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(cfg_().sheetName) || ss.getSheets()[0];
+  const sheet = steamSheet_(ss);
   const headers = headersOf_(sheet);
   const nameIdx = headers.findIndex(h => NAME_HEADERS.indexOf(h) !== -1);
   if (nameIdx === -1) return 0;
@@ -495,7 +543,7 @@ function showSettings() {
     'Re-check games played in last ' + c.recentHours + ' h; shared/free games every ' + c.sharedMinutes + ' min',
     'Auto-add Want to Play games: ' + onOff(c.raWantAuto),
     'Link game names: ' + onOff(c.linkNames),
-    'Missing achievements note (Steam): ' + onOff(c.missingNotes),
+    'Missing achievements note (Steam and RetroAchievements): ' + onOff(c.missingNotes),
     'Genre column: ' + onOff(c.genreColumn),
     'Status column: ' + onOff(c.statusColumn),
     'Discord last-played posts: ' + onOff(c.postLastPlayed),
@@ -513,6 +561,7 @@ function resetSettings() {
   if (ui.alert('Reset all settings to their defaults? (Your Steam key and Discord webhook are kept.)', ui.ButtonSet.OK_CANCEL) !== ui.Button.OK) return;
   const wasOn = autoUpdateOn_();
   PropertiesService.getScriptProperties().deleteProperty('SETTINGS');
+  CFG_CACHE = null;
   setCfg_({ autoOn: wasOn });
   if (wasOn) installAutoUpdate(); else buildMenu_();
 }
@@ -541,6 +590,7 @@ function updateAndPostNow() { run_(true, false); }
 function postWeeklyNow() { run_(false, true); }
 
 function withLock_(fn, waitMs) {
+  CFG_CACHE = null;                                      // start every action from the saved settings
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(waitMs || 30000)) { alert_('Another Achievement Tracker task is running. Try again in a moment.'); return; }
   try { return fn(); } finally { lock.releaseLock(); }
@@ -586,7 +636,7 @@ function updateSteam_(force, forceNotes) {
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const conf = cfg_();
-  const sheet = ss.getSheetByName(conf.sheetName) || ss.getSheets()[0];
+  const sheet = steamSheet_(ss);
   if (isBlankSheet_(sheet)) {
     setupLayout_(sheet);
     alert_('Blank sheet set up. Type your game names under GAME LIST, then run Achievement Tracker > Update now.');
@@ -1151,10 +1201,10 @@ function sendTestCompletion() {
     }
     return t;
   };
-  const steam = finished(ss.getSheetByName(c.sheetName) || ss.getSheets()[0], 'steam');
+  const steam = finished(steamSheet_(ss), 'steam');
   if (steam) picks.push(steam);
   if (c.raOn && raUser_()) {
-    const ra = finished(ss.getSheetByName(c.raSheetName), 'ra');
+    const ra = finished(retroSheet_(ss), 'ra');
     if (ra) {
       try {   // the game icon comes from your RetroAchievements history
         const entries = raFetchProgress_();
@@ -1456,10 +1506,11 @@ function isBlankSheet_(sheet) {
   return sheet.getLastRow() === 0 || sheet.getLastColumn() === 0;
 }
 
+
 // Menu entry: only ever acts on a completely empty sheet, so it can't overwrite your data.
 function setupSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(cfg_().sheetName) || ss.getSheets()[0];
+  const sheet = steamSheet_(ss);
   if (!isBlankSheet_(sheet)) {
     alert_('The "' + sheet.getName() + '" tab already has content, so nothing was changed. ' +
       'The layout is only created on a completely blank sheet.');
@@ -1676,7 +1727,7 @@ function targetSheet_() {
   const c = cfg_();
   const active = ss.getActiveSheet();
   if (active && (active.getName() === c.sheetName || active.getName() === c.raSheetName)) return active;
-  return ss.getSheetByName(c.sheetName) || ss.getSheets()[0];
+  return steamSheet_(ss);
 }
 
 // ---------- sorting ----------
@@ -1913,7 +1964,7 @@ const HC_HEADERS = ['COLLECTED HC ACHIES', 'TOTAL HC ACHIES', 'HC AMOUNT DONE', 
 
 function upgradeRetroLayout() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(cfg_().raSheetName);
+  const sheet = retroSheet_(ss);
   if (!sheet) { alert_('There is no "' + cfg_().raSheetName + '" tab yet.'); return; }
   const r = withLock_(() => upgradeRetroLayout_(sheet));
   if (r) { alert_(r); updateSteamSheet(); }
@@ -1992,7 +2043,7 @@ function applyFormatting() {
   const names = [c.sheetName, c.raSheetName].filter((n, i, a) => n && a.indexOf(n) === i);
   const done = [];
   names.forEach(n => {
-    const sh = ss.getSheetByName(n);
+    const sh = tabOf_(ss, n);
     if (!sh || isBlankSheet_(sh)) return;
     const rows = sh.getLastRow() - 1;
     if (rows < 1) return;
@@ -2108,7 +2159,7 @@ function importLibrary_() {
   if (!key || !steamId) return { msg: 'Run Achievement Tracker > Settings > Accounts > Steam API key & Steam ID first.', added: 0 };
   if (!/^\d{17}$/.test(steamId)) { steamId = resolveVanity_(key, steamId); props.setProperty('STEAM_ID', steamId); }
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(cfg_().sheetName) || ss.getSheets()[0];
+  const sheet = steamSheet_(ss);
   if (isBlankSheet_(sheet)) return { msg: 'The "' + sheet.getName() + '" tab is blank. Run Tools > Set up blank sheet first, then import.', added: 0 };
   const headers = headersOf_(sheet);
   const nameIdx = headers.findIndex(h => NAME_HEADERS.indexOf(h) !== -1);
@@ -2298,7 +2349,7 @@ function removeStatusColours_(sheet, si) {
 function eachStatusSheet_(fn) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   [cfg_().sheetName, cfg_().raSheetName].forEach(n => {
-    const sh = ss.getSheetByName(n);
+    const sh = tabOf_(ss, n);
     if (!sh) return;
     const si = headersOf_(sh).findIndex(h => PLAY_STATUS_HEADERS.indexOf(h) !== -1);
     if (si !== -1) fn(sh, si);
@@ -2495,7 +2546,7 @@ function raFetchWantToPlay_() {
 function importWantToPlay() {
   const props = PropertiesService.getScriptProperties();
   if (!props.getProperty('RA_USER') || !props.getProperty('RA_KEY')) { alert_('Connect RetroAchievements first: Settings > Accounts > RetroAchievements username & key.'); return; }
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(cfg_().raSheetName);
+  const sheet = retroSheet_(SpreadsheetApp.getActiveSpreadsheet());
   if (!sheet || isBlankSheet_(sheet)) { alert_('The "' + cfg_().raSheetName + '" tab is missing or blank. Run Tools > Set up RetroAchievements tab first.'); return; }
   let r;
   try { r = withLock_(() => raImportWantToPlay_(sheet)); } catch (e) { alert_(String(e.message || e)); return; }
@@ -2802,12 +2853,15 @@ function setupRetroSheet() {
       : 'Next, run Settings > Set RetroAchievements username & key to connect your account, then type your games under GAME LIST.'));
 }
 
-function updateRetro_(force) {
+let raNotesLeft_ = 0;                                  // RetroAchievements games still waiting for their missing-achievements note
+const RA_NOTES_PER_RUN = 20;                           // an ordinary update fills this many new notes; the Import button has no cap
+
+function updateRetro_(force, forceNotes) {
   const props = PropertiesService.getScriptProperties();
   if (!props.getProperty('RA_USER') || !props.getProperty('RA_KEY')) return [];
   const c = cfg_();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName(c.raSheetName);
+  let sheet = retroSheet_(ss);
   if (!sheet) sheet = ss.insertSheet(c.raSheetName);
   if (isBlankSheet_(sheet)) {
     setupLayout_(sheet, RA_LAYOUT);
@@ -2889,9 +2943,25 @@ function updateRetro_(force) {
   const epochOf = e => { const d = e ? parseRaDate_(e.MostRecentAwardedDate) : null; return d ? Math.floor(d.getTime() / 1000) : 0; };
   const needAch = items.filter(it => !it.missing && it.entry && lastUnlock['ra' + it.id] !== undefined &&
     epochOf(it.entry) > lastUnlock['ra' + it.id]);
+  // Games that need a missing-achievements note: none yet, or the collected count changed since the note was made.
+  const notesOn = !!(c.missingNotes || forceNotes) && col.unlocked >= 0;
+  const oldU = notesOn ? sheet.getRange(top, col.unlocked + 1, numRows, 1).getNotes() : null;
+  const haveNote = i => String(oldU[i][0]).indexOf(MISS_NOTE) === 0;
+  const awardedOf = it => it.entry ? Number(it.entry.NumAwarded) || 0 : 0;
+  const maxOf = it => it.entry ? Number(it.entry.MaxPossible) || 0 : (it.found ? Number(it.found.total) || 0 : 0);
+  const sheetCount = it => { const v = cell(data[it.i], col.unlocked); return v === '' ? -1 : Number(v); };
+  const noteTried = loadJson_(props, 'RA_NOTE_TRIED') || {};   // game id -> when RetroAchievements last sent no achievement list for it
+  let needNote = !notesOn ? [] : items.filter(it => !it.missing && !(noteTried[it.id] && nowMs - noteTried[it.id] < 86400000) && (it.entry || it.found) && maxOf(it) > 0 && awardedOf(it) < maxOf(it) &&
+    (!haveNote(it.i) || sheetCount(it) !== awardedOf(it)) && needAch.indexOf(it) === -1 && needInfo.indexOf(it) === -1);
+  raNotesLeft_ = 0;
+  if (!forceNotes && needNote.length > RA_NOTES_PER_RUN) { raNotesLeft_ = needNote.length - RA_NOTES_PER_RUN; needNote = needNote.slice(0, RA_NOTES_PER_RUN); }
   const ids = [];
-  needInfo.concat(needAch).forEach(it => { if (ids.indexOf(it.id) === -1) ids.push(it.id); });
-  const infos = ids.length ? raFetchInfo_(ids, 150) : {};
+  needInfo.concat(needAch).concat(needNote).forEach(it => { if (ids.indexOf(it.id) === -1) ids.push(it.id); });
+  const infos = ids.length ? raFetchInfo_(ids, forceNotes ? 200 : 150) : {};
+  if (forceNotes) raNotesLeft_ = needNote.filter(it => !infos[it.id]).length;
+  let triedChanged = false;
+  if (notesOn) ids.forEach(id => { const inf0 = infos[id]; if (inf0 && !(inf0.Achievements && Object.keys(inf0.Achievements).length)) { noteTried[id] = nowMs; triedChanged = true; } });
+  if (triedChanged) saveJson_(props, 'RA_NOTE_TRIED', noteTried);
   let cacheChanged = false;
   ids.forEach(id => {
     if (infos[id] && genreDue(id)) {
@@ -2917,6 +2987,7 @@ function updateRetro_(force) {
   };
   const now = new Date();
   const tracked = [];
+  const noteU = {};                                            // row -> new note text for COLLECTED ACHIES ('' clears a note this script made)
 
   items.forEach(it => {
     const i = it.i;
@@ -2969,6 +3040,10 @@ function updateRetro_(force) {
       if (out.completed) put('completed', i, awarded === total && doneDate ? doneDate : '');
       if (changed) put('updated', i, now);
       setNote(i, it.note);
+      if (notesOn) {                                            // the missing-achievements note for COLLECTED ACHIES
+        if (awarded >= total) noteU[i] = '';
+        else if (inf && inf.Achievements) noteU[i] = missingNote_(raMissing_(inf), false);
+      }
       // Newly earned achievements (names + descriptions) for the Discord post.
       const ukey = 'ra' + it.id, lu = lastUnlock[ukey];
       const topTs = e ? epochOf(e) : (lastDate ? Math.floor(lastDate.getTime() / 1000) : 0);
@@ -3014,9 +3089,35 @@ function updateRetro_(force) {
   writeColumns_(sheet, col, out, numRows, orig);
   alignColumns_(sheet, headers, numRows);
   if (notes.some((n, i) => n[0] !== oldNotes[i])) nameRange.setNotes(notes);
+  if (notesOn && Object.keys(noteU).length) {
+    const nr = sheet.getRange(top, col.unlocked + 1, numRows, 1);
+    const nn = nr.getNotes();
+    let ch = false;
+    Object.keys(noteU).forEach(k => {
+      const cur = String(nn[k][0]), next = noteU[k];
+      if (cur !== '' && cur.indexOf(MISS_NOTE) !== 0) return;       // your own note: left alone
+      if (cur !== next) { nn[k][0] = next; ch = true; }
+    });
+    if (ch) nr.setNotes(nn);
+  }
   saveJson_(props, 'LAST_UNLOCK', lastUnlock);
   applyPlayStatus_(sheet, headers, nameIdx, numRows);
   return tracked;
+}
+
+// The achievements you have not earned in a RetroAchievements game, easiest (most players) first:
+// [id, title, description, % of players who have it].
+function raMissing_(inf) {
+  const players = Number(inf.NumDistinctPlayers || inf.NumDistinctPlayersCasual || inf.NumDistinctPlayersHardcore) || 0;
+  const out = [];
+  Object.keys(inf.Achievements || {}).forEach(k => {
+    const a = inf.Achievements[k];
+    if (a.DateEarned || a.DateEarnedHardcore) return;
+    const pc = players > 0 && a.NumAwarded !== undefined ? Number(a.NumAwarded) / players * 100 : null;
+    out.push([String(a.ID || k), String(a.Title || '').replace(/\s+/g, ' ').trim(), String(a.Description || '').replace(/\s+/g, ' ').trim(), pc]);
+  });
+  out.sort((x, y) => (y[3] === null ? -1 : y[3]) - (x[3] === null ? -1 : x[3]));
+  return out;
 }
 
 // Shows how a row on the RetroAchievements tab is matched.
@@ -3341,7 +3442,7 @@ function problemsReport_() {
   const c = cfg_();
   const found = [];
   [c.sheetName, c.raSheetName].forEach(name => {
-    const sh = ss.getSheetByName(name);
+    const sh = tabOf_(ss, name);
     if (!sh || isBlankSheet_(sh)) return;
     const headers = headersOf_(sh);
     const nameIdx = headers.findIndex(h => NAME_HEADERS.indexOf(h) !== -1);
@@ -3380,7 +3481,7 @@ function problemsReport_() {
   sh.setFrozenRows(1);
   const body = found.map(f => [f[0], f[1], f[2], f[3], f[4]]);
   sh.getRange(2, 1, body.length, 5).setValues(body);
-  const links = found.map(f => { const t = ss.getSheetByName(f[0]); return ['=HYPERLINK("#gid=' + t.getSheetId() + '&range=A' + f[1] + '",' + f[1] + ')']; });
+  const links = found.map(f => { const t = tabOf_(ss, f[0]); return ['=HYPERLINK("#gid=' + t.getSheetId() + '&range=A' + f[1] + '",' + f[1] + ')']; });
   sh.getRange(2, 2, body.length, 1).setFormulas(links);
   return found.length + ' game' + (found.length === 1 ? '' : 's') + ' need attention. They are listed on the "' + PROBLEMS_TAB + '" tab; click a ROW number to jump to the game.';
 }
@@ -3403,7 +3504,7 @@ function backupTabs_() {
   const stamp = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd HHmm');
   const made = [];
   [c.sheetName, c.raSheetName].forEach(n => {
-    const sh = ss.getSheetByName(n);
+    const sh = tabOf_(ss, n);
     if (!sh || isBlankSheet_(sh)) return;
     const copy = sh.copyTo(ss);
     copy.setName(('Backup ' + stamp + ' ' + n).slice(0, 99));
@@ -3431,17 +3532,18 @@ function buildStats_() {
   const q = n => "'" + String(n).replace(/'/g, "''") + "'";
   // A game range from the first game row to just above the bottom totals row (or the end of the sheet).
   const spec = name => {
-    const sh = ss.getSheetByName(name);
+    const sh = tabOf_(ss, name);
     if (!sh || isBlankSheet_(sh)) return null;
     const headers = headersOf_(sh), top = topRow_(sh);
     const tr = totalsRowOf_(sh, headers);
     const end = tr > top ? tr - 1 : Math.max(sh.getMaxRows(), top);
-    const rngI = i => q(name) + '!' + colLetter_(i) + top + ':' + colLetter_(i) + end;
+    const tabName = sh.getName();
+    const rngI = i => q(tabName) + '!' + colLetter_(i) + top + ':' + colLetter_(i) + end;
     const rng = h => { const i = headers.indexOf(h); return i < 0 ? null : rngI(i); };
     const nameH = NAME_HEADERS.find(h => headers.indexOf(h) !== -1);
-    return { name: name, r: rng, rI: rngI, game: nameH ? rng(nameH) : null, headers: headers };
+    return { name: tabName, r: rng, rI: rngI, game: nameH ? rng(nameH) : null, headers: headers };
   };
-  const st = spec(c.sheetName), ra = c.raOn || ss.getSheetByName(c.raSheetName) ? spec(c.raSheetName) : null;
+  const st = spec(c.sheetName), ra = c.raOn || retroSheet_(ss) ? spec(c.raSheetName) : null;
   if (!st && !ra) return 'There is no Steam or RetroAchievements tab to build statistics from yet.';
 
   let sh = ss.getSheetByName(STATS_TAB);
@@ -3538,7 +3640,7 @@ const BUY_URL = /^https:\/\/store\.steampowered\.com\/app\/(\d+)\//;
 
 function addBuyColumn() {
   const r = withLock_(() => {
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(cfg_().sheetName);
+    const sheet = steamSheet_(SpreadsheetApp.getActiveSpreadsheet());
     if (!sheet || isBlankSheet_(sheet)) return 'Set up the Steam tab first.';
     const headers = headersOf_(sheet);
     const bi = headers.indexOf(BUY_HEADER.toLowerCase());
@@ -3571,7 +3673,7 @@ function linkGamesToBuy() {
 }
 
 function linkGamesToBuy_() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(cfg_().sheetName);
+  const sheet = steamSheet_(SpreadsheetApp.getActiveSpreadsheet());
   if (!sheet || isBlankSheet_(sheet)) return 'There is no Steam tab to work on.';
   const headers = headersOf_(sheet);
   const i = headers.indexOf(BUY_HEADER.toLowerCase());
@@ -3651,7 +3753,7 @@ function linkGamesToBuy_() {
 // Sorts only the GAMES TO BUY column, A-Z. The rest of the sheet does not move; links and notes travel with their names.
 function sortBuyColumn() {
   const r = withLock_(() => {
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(cfg_().sheetName);
+    const sheet = steamSheet_(SpreadsheetApp.getActiveSpreadsheet());
     if (!sheet || isBlankSheet_(sheet)) return 'There is no Steam tab to work on.';
     const i = headersOf_(sheet).indexOf(BUY_HEADER.toLowerCase());
     if (i < 0) return 'The "' + sheet.getName() + '" tab has no ' + BUY_HEADER + ' column. Add one with Sheet setup > Add GAMES TO BUY column.';
@@ -3662,6 +3764,30 @@ function sortBuyColumn() {
     const withId = hd[i + 1] === BUY_ID_HEADER.toLowerCase();       // the app ids move with their names
     retry_(() => sheet.getRange(top, i + 1, n, withId ? 2 : 1).sort({ column: i + 1, ascending: true }));
     return 'Sorted ' + BUY_HEADER + ' A-Z. Blank cells are at the bottom.';
+  });
+  if (r) alert_(r);
+}
+
+// Renames the Steam tab to STEAM and the RetroAchievements tab to RETRO, and saves those names as the tab settings.
+function renameTabs() {
+  const r = withLock_(() => {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const c = cfg_();
+    const steam = steamSheet_(ss), ra = retroSheet_(ss);
+    const lines = [], upd = {};
+    const one = (sheet, want, key, label) => {
+      if (!sheet) { upd[key] = want; lines.push('There is no ' + label + ' tab yet; it will be created as "' + want + '".'); return; }
+      const cur = sheet.getName();
+      if (cur === want) { upd[key] = want; lines.push('The ' + label + ' tab is already "' + want + '".'); return; }
+      const clash = ss.getSheetByName(want);
+      if (clash && clash.getSheetId() !== sheet.getSheetId()) { lines.push('Could not rename "' + cur + '": a different tab is already called "' + want + '".'); return; }
+      sheet.setName(want); upd[key] = want;
+      lines.push('Renamed "' + cur + '" to "' + want + '".');
+    };
+    one(steam, 'STEAM', 'sheetName', 'Steam');
+    one(ra && ra.getSheetId() !== (steam && steam.getSheetId()) ? ra : null, 'RETRO', 'raSheetName', 'RetroAchievements');
+    if (Object.keys(upd).length) { setCfg_(upd); buildMenu_(); }
+    return lines.join('\n');
   });
   if (r) alert_(r);
 }
