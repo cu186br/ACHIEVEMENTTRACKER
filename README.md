@@ -95,12 +95,12 @@ Run **Achievement Tracker → Settings → Updates → Auto-update**. It default
 | **Update now**, **Update + post last played to Discord**, **Post weekly summary now (preview)** | The everyday actions. |
 | **Sort the list** | The sort options and the sort range. |
 | **Add games** | Import Steam library games with achievements, Import RetroAchievements Want to Play list, Add game rows. |
-| **Sheet setup** | Set up blank sheet, Set up RetroAchievements tab, Add BACKLOG STATUS / DATE COMPLETED columns, Add totals to top, Add GAMES TO BUY column, Upgrade RetroAchievements columns (hardcore), Apply text alignment (all tabs), and an **Optional tabs** submenu: Build STATS tab and the Progress history switch. |
+| **Sheet setup** | Set up blank sheet, Set up RetroAchievements tab, Add BACKLOG STATUS / DATE COMPLETED columns, Add totals to top, Add GAMES TO BUY column, Rename tabs to STEAM and RETRO, Upgrade RetroAchievements columns (hardcore), Apply text alignment (all tabs), and an **Optional tabs** submenu: Build STATS tab and the Progress history switch. |
 | **Tools** | Problems report and Diagnose selected game; Link GAMES TO BUY to the Steam store and Sort GAMES TO BUY A-Z; Import missing achievements (notes) and Back up the tabs; Send test 100% post to Discord. |
 | **Settings → Accounts** | Steam API key and ID, RetroAchievements username and key, Discord webhook. |
 | **Settings → Updates** | Auto-update on/off and frequency (1, 5, 10, 15 or 30 min), how long a recently played game keeps being re-checked, and how often family-shared and free-to-play games are re-checked (default every 60 minutes; Steam reports no playtime for them, so they run on a timer). |
 | **Settings → Sheets & columns** | Steam tab name, rows on a new sheet, store links, genre and status columns. Turning **Link game names** off removes the Steam links the script added and resets those names to plain text (links you added yourself are left alone). |
-| **Settings → Steam achievement data** | Missing achievements note on/off, leave archived achievements out of the total on/off. |
+| **Settings → Steam achievement data** | Missing achievements note on/off (applies to both tabs), leave archived achievements out of the total on/off. |
 | **Settings → RetroAchievements** | Track RetroAchievements on/off, tab name, auto-add Want to Play games. |
 | **Settings → Backlog status** | The IDLE cutoff and the status colours. |
 | **Settings → Cell update rules** | Overwrite or keep your edits, per column. |
@@ -220,6 +220,8 @@ A column for games you want but don't own yet. Type the names under a header cal
 
 You can also run **Sheet setup → Set up RetroAchievements tab** at any time, before or after connecting. It only works on a blank tab, so it can't overwrite anything. Turn the tracking on or off and rename the tab under **Settings → RetroAchievements**.
 
+**Tab names.** New setups use the tab names **STEAM** and **RETRO**. To rename tabs you already have, run **Sheet setup → Rename tabs to STEAM and RETRO**; it renames them and saves the names as the settings (it skips a tab if another tab already has that name). If you never saved a tab name and your retro tab is still called RetroAchievements, the script keeps using it until you rename it.
+
 ### How games are found
 
 - **Games you have played:** matched by title from your RetroAchievements history, with your real collected and hardcore counts.
@@ -249,8 +251,9 @@ The RetroAchievements tab carries over Discord posts (last played, 100% completi
 Hover over a game's **COLLECTED ACHIES** cell to see the achievements you are still missing: name, description and, in brackets, the percent of players who have it. The list is sorted with the most common first, so the easy ones are on top. A note holds up to 20,000 characters; a very long list ends with "…and N more". Completed games have no note, and a note you wrote yourself is never replaced.
 
 - Notes are refreshed whenever a game is checked. **Tools → Import missing achievements (notes)** fills them in for every game at once (and turns the setting on). It makes several passes on a long list and tells you if some games still need a second run.
-- Turn the notes off under **Settings → Steam achievement data → Missing achievements note**. This also removes the notes the script made.
-- Steam only. Hidden achievements may have no description.
+- Turn the notes off under **Settings → Steam achievement data → Missing achievements note**. This also removes the notes the script made, on both tabs.
+- Works on the Steam tab and the RetroAchievements tab. On the RetroAchievements tab a game with no note yet gets one on a normal update, 20 games per update (the Import button has no limit), and the percent is the share of that game's players who have the achievement. A game's note is refreshed when its collected count changes.
+- Hidden achievements may have no description.
 
 ## Archived achievements
 
