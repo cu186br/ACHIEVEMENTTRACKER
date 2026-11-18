@@ -95,7 +95,7 @@ Run **Achievement Tracker → Settings → Updates → Auto-update**. It default
 | **Update now**, **Update + post last played to Discord**, **Post weekly summary now (preview)** | The everyday actions. |
 | **Sort the list** | The sort options and the sort range. |
 | **Add games** | Import Steam library games with achievements, Import RetroAchievements Want to Play list, Add game rows. |
-| **Sheet setup** | Set up blank sheet, Set up RetroAchievements tab, Add BACKLOG STATUS / DATE COMPLETED columns, Add totals to top, Add GAMES TO BUY column, Rename tabs to STEAM and RETRO, Upgrade RetroAchievements columns (hardcore), Apply text alignment (all tabs), and an **Optional tabs** submenu: Build STATS tab and the Progress history switch. |
+| **Sheet setup** | Set up blank sheet, Set up RetroAchievements tab, Add BACKLOG STATUS / DATE COMPLETED columns, Add totals to top, Add GAMES TO BUY column, Rename tabs to STEAM and RETRO, Add RetroAchievements points columns, Add hardcore points column, Upgrade RetroAchievements columns (hardcore), Apply text alignment (all tabs), and an **Optional tabs** submenu: Build STATS tab and the Progress history switch. |
 | **Tools** | Problems report and Diagnose selected game; Link GAMES TO BUY to the Steam store and Sort GAMES TO BUY A-Z; Import missing achievements (notes) and Back up the tabs; Send test 100% post to Discord. |
 | **Settings → Accounts** | Steam API key and ID, RetroAchievements username and key, Discord webhook. |
 | **Settings → Updates** | Auto-update on/off and frequency (1, 5, 10, 15 or 30 min), how long a recently played game keeps being re-checked, and how often family-shared and free-to-play games are re-checked (default every 60 minutes; Steam reports no playtime for them, so they run on a timer). |
@@ -104,6 +104,7 @@ Run **Achievement Tracker → Settings → Updates → Auto-update**. It default
 | **Settings → RetroAchievements** | Track RetroAchievements on/off, tab name, auto-add Want to Play games. |
 | **Settings → Backlog status** | The IDLE cutoff and the status colours. |
 | **Settings → Cell update rules** | Overwrite or keep your edits, per column. |
+| **Discord look** | Colours, fields to show, wording, sender name and picture, role mention, image style, compact posts, and a reset. |
 | **Settings → Discord** | Last-played, 100%, rare-achievement and weekly posts, the rarity limit, failure warnings, and the weekly day and hour. |
 | **Settings → Show all settings / Reset** | Lists every setting, or restores the defaults. |
 
@@ -246,6 +247,10 @@ Columns are aligned for readability: COLLECTED ACHIES, TOTAL ACHIES, COMPLETED, 
 
 The RetroAchievements tab carries over Discord posts (last played, 100% completion which says *Mastered in hardcore* when it applies), the weekly summary, sorting, update rules and totals. It has no store links, AppID, hours or STATUS column.
 
+## RetroAchievements points
+
+**Sheet setup → Add RetroAchievements points columns** adds **COLLECTED POINTS** and **TOTAL POINTS** to the RETRO tab (after the achievement columns, with totals where the tab has them). Points come from each achievement's points on RetroAchievements; COLLECTED POINTS counts every unlock (hardcore and softcore), and TOTAL POINTS is what the game offers overall. **Sheet setup → Add hardcore points column (RetroAchievements)** adds **COLLECTED HC POINTS** between them, so you can see hardcore points separately from your overall points. Because points need each game's achievement list, a normal update fills 20 games at a time; **Tools → Import missing achievements (notes)** fills every game at once. A game is refreshed when its collected count changes. STATS shows points earned, hardcore points and points available, and the 100% post shows them for RetroAchievements games.
+
 ## Missing achievements notes
 
 Hover over a game's **COLLECTED ACHIES** cell to see the achievements you are still missing: name, description and, in brackets, the percent of players who have it. The list is sorted with the most common first, so the easy ones are on top. A note holds up to 20,000 characters; a very long list ends with "…and N more". Completed games have no note, and a note you wrote yourself is never replaced.
@@ -286,6 +291,18 @@ Both are optional and are never created by an update; you set them up from **She
 - **Rare achievements (Steam):** a short post for an achievement you just unlocked that fewer than 5% of players have (change the limit under **Settings → Discord**). At most the 3 rarest are posted per update.
 - **Failure warning:** if an update fails (a wrong key, a private profile, Steam down), one short warning is posted, at most once every 6 hours. Turn it off under **Settings → Discord**.
 - **Weekly summary:** hours played, achievements gained, top games, anything completed that week, and your sheet-wide totals. It only counts the games on your sheet, and games you add mid-week count from the day you add them. It needs auto-update on.
+
+### Discord look (customizing the posts)
+
+The **Discord look** menu changes how the posts look. Nothing changes until you pick something, and **Reset Discord look to defaults** puts it all back. **Send test 100% post** shows the result.
+
+- **Colours:** a colour (`#rrggbb`) for each post type: 100%, last played, rare achievement, weekly summary and failure warning. Type `default` to go back.
+- **Fields to show:** switch the Total hours, Hardcore, Points, Games at 100%, New since last post and achievement-name fields on or off.
+- **Wording:** your own titles for the last-played, 100% and rare posts. Use `{game}`, `{done}`, `{total}`, `{pct}` (and `{console}` on the 100% post, `{name}` on the rare post), for example `Played {game} ({done}/{total})`.
+- **Sender name and picture:** a name and an https picture link for Steam posts and another pair for RetroAchievements posts, so they look different. Discord doesn't allow names containing "discord" or "clyde".
+- **Role mention:** the id of a role to ping on 100% posts and rare posts (each can be switched off). Only that role is pinged.
+- **Image style:** default (Steam wide image, RetroAchievements icon), small picture, large picture, or none.
+- **Compact posts:** a short post with a title and one line, no fields or image.
 
 ## How it works
 
