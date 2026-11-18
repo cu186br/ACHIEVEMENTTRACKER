@@ -16,6 +16,14 @@ const DEFAULTS = {
   postRare: true,        // Discord: post when you unlock a rare Steam achievement
   rarePct: 5,            // ...rarer than this percent of players
   weeklyOn: true,        // Discord: weekly summary
+  // Discord look (Discord look menu). Empty text = the built-in look.
+  dcShowHours: true, dcShowHardcore: true, dcShowPoints: true, dcShowGames100: true, dcShowNew: true, dcShowNewAch: true,   // which fields appear
+  dcImage: 'default',    // default (Steam wide image, RetroAchievements icon) | thumb | large | none
+  dcCompact: false,      // short posts: title and one line, no fields or image
+  dcColorCompletion: '', dcColorLast: '', dcColorRare: '', dcColorWeekly: '', dcColorFailure: '',   // #rrggbb
+  dcTitleLast: '', dcTitleCompletion: '', dcTitleRare: '',   // text with {game} {done} {total} {pct} {name} {console}
+  dcNameSteam: '', dcNameRa: '', dcAvatarSteam: '', dcAvatarRa: '',   // sender name and picture (https link) per source
+  dcRole: '', dcRoleCompletion: true, dcRoleRare: true,      // role id to mention on 100% / rare posts (only when a role id is set)
   weeklyDay: 0,          // 0 = Sunday ... 6 = Saturday, in the sheet's time zone
   weeklyHour: 20,        // 0-23
   autoOn: false,         // remembers whether auto-update was turned on from the menu
@@ -195,6 +203,8 @@ function buildMenu_() {
     .addItem('Add totals to top', 'addTopTotals')
     .addItem('Add GAMES TO BUY column', 'addBuyColumn')
     .addItem('Rename tabs to STEAM and RETRO', 'renameTabs')
+    .addItem('Add RetroAchievements points columns', 'addRetroPointsColumns')
+    .addItem('Add hardcore points column (RetroAchievements)', 'addRetroHcPointsColumn')
     .addItem('Upgrade RetroAchievements columns (hardcore)', 'upgradeRetroLayout')
     .addSeparator()
     .addItem('Apply text alignment (all tabs)', 'applyFormatting')
@@ -251,6 +261,45 @@ function buildMenu_() {
     rules.addItem(r[1] + ': ' + (c.keep[r[0]] ? 'KEEP my edits' : 'script overwrites'), 'rule_' + r[0]);
   });
 
+  const colTxt = (k, d) => (c['dcColor' + k] || d) ;
+  const lookColours = ui.createMenu('Colours')
+    .addItem('100% post: ' + colTxt('Completion', 'default') + ' (change)', 'dcColorCompletion_')
+    .addItem('Last-played post: ' + colTxt('Last', 'default') + ' (change)', 'dcColorLast_')
+    .addItem('Rare achievement post: ' + colTxt('Rare', 'default') + ' (change)', 'dcColorRare_')
+    .addItem('Weekly summary: ' + colTxt('Weekly', 'default') + ' (change)', 'dcColorWeekly_')
+    .addItem('Failure warning: ' + colTxt('Failure', 'default') + ' (change)', 'dcColorFailure_');
+  const lookFields = ui.createMenu('Fields to show')
+    .addItem('Total hours (Steam): ' + onOff(c.dcShowHours), 'toggleDcHours')
+    .addItem('Hardcore (RetroAchievements): ' + onOff(c.dcShowHardcore), 'toggleDcHardcore')
+    .addItem('Points (RetroAchievements 100%): ' + onOff(c.dcShowPoints), 'toggleDcPoints')
+    .addItem('Games at 100%: ' + onOff(c.dcShowGames100), 'toggleDcGames100')
+    .addItem('New since last post: ' + onOff(c.dcShowNew), 'toggleDcNew')
+    .addItem('New / final achievement names: ' + onOff(c.dcShowNewAch), 'toggleDcNewAch');
+  const lookWording = ui.createMenu('Wording')
+    .addItem('Last-played title: ' + (c.dcTitleLast || 'default') + ' (change)', 'dcTitleLast_')
+    .addItem('100% title: ' + (c.dcTitleCompletion || 'default') + ' (change)', 'dcTitleCompletion_')
+    .addItem('Rare achievement title: ' + (c.dcTitleRare || 'default') + ' (change)', 'dcTitleRare_');
+  const lookSender = ui.createMenu('Sender name and picture')
+    .addItem('Steam posts name: ' + (c.dcNameSteam || 'webhook default') + ' (change)', 'dcNameSteam_')
+    .addItem('Steam posts picture (change)', 'dcAvatarSteam_')
+    .addItem('RetroAchievements posts name: ' + (c.dcNameRa || 'webhook default') + ' (change)', 'dcNameRa_')
+    .addItem('RetroAchievements posts picture (change)', 'dcAvatarRa_');
+  const lookRole = ui.createMenu('Role mention')
+    .addItem('Role id: ' + (c.dcRole || 'none') + ' (change)', 'dcRole_')
+    .addItem('Mention on 100% posts: ' + onOff(c.dcRoleCompletion), 'toggleDcRoleCompletion')
+    .addItem('Mention on rare posts: ' + onOff(c.dcRoleRare), 'toggleDcRoleRare');
+  const look = ui.createMenu('Discord look')
+    .addSubMenu(lookColours)
+    .addSubMenu(lookFields)
+    .addSubMenu(lookWording)
+    .addSubMenu(lookSender)
+    .addSubMenu(lookRole)
+    .addItem('Image style: ' + DC_IMAGE_LABEL[c.dcImage || 'default'] + ' (change)', 'dcImageCycle')
+    .addItem('Compact posts: ' + onOff(c.dcCompact), 'toggleDcCompact')
+    .addSeparator()
+    .addItem('Send test 100% post', 'sendTestCompletion')
+    .addItem('Reset Discord look to defaults', 'resetDcLook');
+
   const discord = ui.createMenu('Discord')
     .addItem('Last-played posts: ' + onOff(c.postLastPlayed), 'toggleLastPlayed')
     .addItem('100% posts: ' + onOff(c.postCompletion), 'toggleCompletion')
@@ -282,6 +331,7 @@ function buildMenu_() {
     .addSubMenu(addMenu)
     .addSubMenu(setupMenu)
     .addSubMenu(toolsMenu)
+    .addSubMenu(look)
     .addSubMenu(settings)
     .addToUi();
 }
@@ -550,6 +600,7 @@ function showSettings() {
     'Discord 100% posts: ' + onOff(c.postCompletion),
     'Discord failure warnings: ' + onOff(c.postFailures) + '\nProgress history log: ' + onOff(historyOn_()),
     'Discord rare achievement posts: ' + onOff(c.postRare) + ' (under ' + c.rarePct + '% of players)',
+    'Discord look: image ' + DC_IMAGE_LABEL[c.dcImage || 'default'] + ', compact ' + onOff(c.dcCompact) + ', role ' + (c.dcRole || 'none') + ' (Discord look menu)',
     'Discord weekly summary: ' + onOff(c.weeklyOn) + ' (' + DAY_NAMES[c.weeklyDay] + ' ' + c.weeklyHour + ':00)',
     'Steam key / ID: ' + (PropertiesService.getScriptProperties().getProperty('STEAM_API_KEY') ? 'saved' : 'NOT set'),
     'Discord webhook: ' + (PropertiesService.getScriptProperties().getProperty('DISCORD_WEBHOOK') ? 'saved' : 'NOT set')
@@ -1144,24 +1195,68 @@ const round1_ = n => Math.round(n * 10) / 10;
 const srcOf_ = t => t.src || 'steam';
 const SRC_NAME = { steam: 'Steam', ra: 'RetroAchievements' };
 
+// ---------- Discord look ----------
+const DC_IMAGE_LABEL = { default: 'default', thumb: 'small picture', large: 'large picture', none: 'none' };
+const DC_DEFAULT_TITLES = { last: '🎮 Last played: {game}', completion: '🏆 100% complete: {game}', rare: '💎 Rare achievement: {name}' };
+const DC_COLORS = { completion: 0xf1c40f, last: 0x1b2838, lastRa: 0xe8b400, rare: 0x9b59b6, weekly: 0x5865f2, failure: 0xe74c3c };
+
+// Fills {game}, {done}... in a title. Unknown words are left as typed.
+function dcFill_(tpl, vars) { return String(tpl).replace(/\{(\w+)\}/g, (m, k) => vars[k] !== undefined ? String(vars[k]) : m); }
+function dcTitle_(c, key, vars) { return dcFill_(c['dcTitle' + key[0].toUpperCase() + key.slice(1)] || DC_DEFAULT_TITLES[key], vars); }
+// A saved #rrggbb colour as a number, else the built-in one.
+function dcColor_(c, key, fallback) {
+  const v = String(c['dcColor' + key[0].toUpperCase() + key.slice(1)] || '');
+  return /^#[0-9a-f]{6}$/i.test(v) ? parseInt(v.slice(1), 16) : fallback;
+}
+// Applies compact mode and the image style to a finished embed. `line` is the one-line text used in compact mode.
+function dcStyle_(embed, c, ra, cover, line) {
+  if (c.dcCompact) {
+    delete embed.fields;
+    embed.description = [embed.description, line].filter(Boolean).join('\n');
+    return embed;
+  }
+  const style = c.dcImage || 'default';
+  if (cover && style !== 'none') embed[style === 'thumb' ? 'thumbnail' : style === 'large' ? 'image' : (ra ? 'thumbnail' : 'image')] = { url: cover };
+  return embed;
+}
+// Sends one embed with the sender name / picture for its source and, if set, a role mention. kind: 'completion' | 'rare' | ''.
+function dcSend_(embed, src, kind) {
+  const c = cfg_();
+  const payload = { embeds: [embed] };
+  const name = src === 'ra' ? c.dcNameRa : src === 'steam' ? c.dcNameSteam : '';
+  const pic = src === 'ra' ? c.dcAvatarRa : src === 'steam' ? c.dcAvatarSteam : '';
+  if (name) payload.username = String(name).slice(0, 80);
+  if (/^https:\/\//.test(String(pic))) payload.avatar_url = pic;
+  const role = String(c.dcRole || '');
+  if (/^\d{5,25}$/.test(role) && ((kind === 'completion' && c.dcRoleCompletion) || (kind === 'rare' && c.dcRoleRare))) {
+    payload.content = '<@&' + role + '>';
+    payload.allowed_mentions = { parse: [], roles: [role] };
+  }
+  return postDiscord_(payload);
+}
+
 // The 100% complete post. `n` = [games at 100%, games tracked]; `earned` = the final achievements (may be empty).
 function completionEmbed_(t, n, earned, test) {
+  const c = cfg_();
   const ra = srcOf_(t) === 'ra';
   const fields = [{ name: 'Achievements', value: t.unlocked + ' / ' + t.total, inline: true }];
-  if (ra) fields.push({ name: 'Hardcore', value: isNum_(t.hardcore) ? t.hardcore + ' / ' + t.total : 'n/a', inline: true });
-  else fields.push({ name: 'Total hours', value: isNum_(t.hours) ? t.hours + ' h' : 'n/a', inline: true });
-  fields.push({ name: 'Games at 100%', value: n[0] + ' / ' + n[1], inline: true });
-  if (earned.length) fields.push({ name: earned.length > 1 ? '\uD83C\uDFC5 Final achievements' : '\uD83C\uDFC5 Final achievement', value: achLines_(earned, 0) });
+  if (ra) { if (c.dcShowHardcore) fields.push({ name: 'Hardcore', value: isNum_(t.hardcore) ? t.hardcore + ' / ' + t.total : 'n/a', inline: true }); }
+  else if (c.dcShowHours) fields.push({ name: 'Total hours', value: isNum_(t.hours) ? t.hours + ' h' : 'n/a', inline: true });
+  if (ra && c.dcShowPoints && t.points && isNum_(t.points[1])) {
+    fields.push({ name: 'Points', value: (isNum_(t.points[0]) ? t.points[0] + ' / ' : '') + t.points[1] + (isNum_(t.points[2]) ? ' (' + t.points[2] + ' hardcore)' : ''), inline: true });
+  }
+  if (c.dcShowGames100) fields.push({ name: 'Games at 100%', value: n[0] + ' / ' + n[1], inline: true });
+  if (earned.length && c.dcShowNewAch) fields.push({ name: earned.length > 1 ? '🏅 Final achievements' : '🏅 Final achievement', value: achLines_(earned, 0) });
   const lead = test ? 'This is a test message. ' : '';
+  const vars = { game: t.title, done: t.unlocked, total: t.total, pct: 100, console: t.consoleName || '' };
   const embed = {
-    title: (test ? '\uD83E\uDDEA TEST \u2014 ' : '') + '\uD83C\uDFC6 100% complete: ' + t.title,
+    title: (test ? '🧪 TEST — ' : '') + dcTitle_(c, 'completion', vars),
     description: lead + (ra ? (t.hardcore === t.total ? 'Mastered in hardcore!' : 'Every achievement unlocked (softcore).') : 'Every achievement unlocked!'),
-    color: 0xf1c40f,
+    color: dcColor_(c, 'completion', DC_COLORS.completion),
     fields: fields
   };
-  if (t.cover) embed[ra ? 'thumbnail' : 'image'] = { url: t.cover };   // Steam: wide header image; RetroAchievements: game icon
   if (ra) embed.footer = { text: 'RetroAchievements' };
-  return embed;
+  return dcStyle_(embed, c, ra, t.cover, t.unlocked + ' / ' + t.total + ' achievements');
 }
 
 // Menu: sends a sample 100% post (using a finished game from your sheet if there is one) so you can see how it looks.
@@ -1225,7 +1320,7 @@ function sendTestCompletion() {
   }
   let bad = 0;
   picks.forEach(t => {
-    const code = postDiscord_({ embeds: [completionEmbed_(t, t.n, [], true)] });
+    const code = dcSend_(completionEmbed_(t, t.n, [], true), srcOf_(t), 'completion');
     if (code < 200 || code >= 300) bad++;
   });
   alert_(bad ? 'Discord rejected the test message. Set the webhook again under Settings > Accounts > Discord webhook.'
@@ -1296,26 +1391,30 @@ function notifyDiscord_(tracked, force, weeklyNow, tz) {
       newTxt = isNum_(b) ? '+' + Math.max(0, pick.unlocked - b) : 'First check';
     }
     const isRa = srcOf_(pick) === 'ra';
-    const fields = isRa
-      ? [{ name: 'Achievements', value: achTxt, inline: true },
-         { name: 'Hardcore', value: isNum_(pick.hardcore) ? pick.hardcore + ' / ' + pick.total : 'n/a', inline: true }]
-      : [{ name: 'Total hours', value: isNum_(pick.hours) ? pick.hours + ' h' : 'n/a', inline: true },
-         { name: 'Achievements', value: achTxt, inline: true }];
-    fields.push({ name: 'New since last post', value: newTxt, inline: true });
+    const fields = [];
+    if (isRa) {
+      fields.push({ name: 'Achievements', value: achTxt, inline: true });
+      if (c.dcShowHardcore) fields.push({ name: 'Hardcore', value: isNum_(pick.hardcore) ? pick.hardcore + ' / ' + pick.total : 'n/a', inline: true });
+    } else {
+      if (c.dcShowHours) fields.push({ name: 'Total hours', value: isNum_(pick.hours) ? pick.hours + ' h' : 'n/a', inline: true });
+      fields.push({ name: 'Achievements', value: achTxt, inline: true });
+    }
+    if (c.dcShowNew) fields.push({ name: 'New since last post', value: newTxt, inline: true });
     const earned = takePend(pick.appid);
-    if (earned.length) {
+    if (earned.length && c.dcShowNewAch) {
       const b = base[pick.appid];
       const extra = isNum_(b) && isNum_(pick.unlocked) ? Math.max(0, pick.unlocked - b - earned.length) : 0;
-      fields.push({ name: earned.length + extra > 1 ? '\uD83C\uDFC5 New achievements' : '\uD83C\uDFC5 New achievement', value: achLines_(earned, extra) });
+      fields.push({ name: earned.length + extra > 1 ? '🏅 New achievements' : '🏅 New achievement', value: achLines_(earned, extra) });
     }
     const embed = {
-      title: '🎮 Last played: ' + pick.title,
-      color: isRa ? 0xe8b400 : 0x1b2838,
+      title: dcTitle_(c, 'last', { game: pick.title, done: isNum_(pick.unlocked) ? pick.unlocked : '', total: isNum_(pick.total) ? pick.total : '', pct: isNum_(pick.unlocked) && pick.total > 0 ? Math.round(pick.unlocked / pick.total * 100) : '' }),
+      color: dcColor_(c, 'last', isRa ? DC_COLORS.lastRa : DC_COLORS.last),
       fields: fields
     };
     if (isRa) embed.footer = { text: 'RetroAchievements' };
     if (pick.lastTs > 0) embed.timestamp = new Date(pick.lastTs * 1000).toISOString();
-    postDiscord_({ embeds: [embed] });
+    dcStyle_(embed, c, isRa, '', achTxt + (newTxt !== 'n/a' ? ' · ' + newTxt + ' new' : ''));
+    dcSend_(embed, srcOf_(pick), '');
     if (isNum_(pick.unlocked)) base[pick.appid] = pick.unlocked;
   }
 
@@ -1324,7 +1423,7 @@ function notifyDiscord_(tracked, force, weeklyNow, tz) {
   // so it is announced again on the next update.
   (c.postCompletion ? completed : []).forEach((t, i) => {
     if (i > 0 || pick) Utilities.sleep(1200);                    // stay under Discord's webhook rate limit
-    const code = postDiscord_({ embeds: [completionEmbed_(t, at100(srcOf_(t)), takePend(t.appid), false)] });
+    const code = dcSend_(completionEmbed_(t, at100(srcOf_(t)), takePend(t.appid), false), srcOf_(t), 'completion');
     if (code < 200 || code >= 300) delete done[t.appid];
   });
 
@@ -1336,10 +1435,11 @@ function notifyDiscord_(tracked, force, weeklyNow, tz) {
     rare.slice(0, 3).forEach((r, i) => {
       if (i > 0 || pick || completed.length) Utilities.sleep(1200);
       const pc = r.a[4] < 10 ? Math.round(r.a[4] * 10) / 10 : Math.round(r.a[4]);
-      const embed = { title: '\uD83D\uDC8E Rare achievement: ' + r.a[0], description: r.a[1] || '', color: 0x9b59b6,
+      const embed = { title: dcTitle_(c, 'rare', { name: r.a[0], game: r.game, pct: pc }), description: r.a[1] || '', color: dcColor_(c, 'rare', DC_COLORS.rare),
         fields: [{ name: 'Game', value: r.game, inline: true }, { name: 'Players who have it', value: pc + '%', inline: true }] };
       if (r.a[2]) embed.timestamp = new Date(r.a[2] * 1000).toISOString();
-      postDiscord_({ embeds: [embed] });
+      dcStyle_(embed, c, false, '', r.game + ' · ' + pc + '% of players');
+      dcSend_(embed, 'steam', 'rare');
     });
   }
 
@@ -1396,7 +1496,7 @@ function notifyDiscord_(tracked, force, weeklyNow, tz) {
       embeds: [{
         title: '📅 Weekly summary' + (weeklyNow && !scheduled ? ' (preview)' : ''),
         description: per.length ? 'Games on your sheet only.' : 'Quiet week: no playtime or new achievements.',
-        color: 0x5865f2,
+        color: dcColor_(cfg_(), 'weekly', DC_COLORS.weekly),
         fields: fields
       }]
     });
@@ -2877,7 +2977,7 @@ function updateRetro_(force, forceNotes) {
   if (nameIdx === -1) throw new Error('Could not find a "GAME LIST" column in row 1 of the "' + c.raSheetName + '" tab.');
   const col = { unlocked: H('collected achies'), total: H('total achies'), hardcore: H('collected hc achies') >= 0 ? H('collected hc achies') : H('hardcore achies'), totalHc: H('total hc achies'), console: H('console'),
     genre: c.genreColumn ? H('genre') : -1, lastPlayed: H('last played'), completed: H('date completed'),
-    updated: H('last updated'), appid: H('game id') };
+    updated: H('last updated'), appid: H('game id'), ptsDone: H('collected points'), ptsTotal: H('total points'), ptsHc: H('collected hc points') };
   if (col.unlocked === -1 || col.total === -1) {
     throw new Error('The "' + c.raSheetName + '" tab needs COLLECTED ACHIES and TOTAL ACHIES columns.');
   }
@@ -2951,8 +3051,13 @@ function updateRetro_(force, forceNotes) {
   const maxOf = it => it.entry ? Number(it.entry.MaxPossible) || 0 : (it.found ? Number(it.found.total) || 0 : 0);
   const sheetCount = it => { const v = cell(data[it.i], col.unlocked); return v === '' ? -1 : Number(v); };
   const noteTried = loadJson_(props, 'RA_NOTE_TRIED') || {};   // game id -> when RetroAchievements last sent no achievement list for it
-  let needNote = !notesOn ? [] : items.filter(it => !it.missing && !(noteTried[it.id] && nowMs - noteTried[it.id] < 86400000) && (it.entry || it.found) && maxOf(it) > 0 && awardedOf(it) < maxOf(it) &&
-    (!haveNote(it.i) || sheetCount(it) !== awardedOf(it)) && needAch.indexOf(it) === -1 && needInfo.indexOf(it) === -1);
+  // Games that need their achievement list for the points columns: a blank cell, or the collected count changed.
+  const ptsOn = col.ptsDone >= 0 || col.ptsTotal >= 0 || col.ptsHc >= 0;
+  const ptsBlank = it => (col.ptsTotal >= 0 && cell(data[it.i], col.ptsTotal) === '') || (col.ptsDone >= 0 && cell(data[it.i], col.ptsDone) === '') || (col.ptsHc >= 0 && cell(data[it.i], col.ptsHc) === '');
+  const noteWanted = it => notesOn && awardedOf(it) < maxOf(it) && (!haveNote(it.i) || sheetCount(it) !== awardedOf(it));
+  const ptsWanted = it => ptsOn && (ptsBlank(it) || sheetCount(it) !== awardedOf(it));
+  let needNote = (!notesOn && !ptsOn) ? [] : items.filter(it => !it.missing && !(noteTried[it.id] && nowMs - noteTried[it.id] < 86400000) && (it.entry || it.found) && maxOf(it) > 0 &&
+    (noteWanted(it) || ptsWanted(it)) && needAch.indexOf(it) === -1 && needInfo.indexOf(it) === -1);
   raNotesLeft_ = 0;
   if (!forceNotes && needNote.length > RA_NOTES_PER_RUN) { raNotesLeft_ = needNote.length - RA_NOTES_PER_RUN; needNote = needNote.slice(0, RA_NOTES_PER_RUN); }
   const ids = [];
@@ -2960,7 +3065,7 @@ function updateRetro_(force, forceNotes) {
   const infos = ids.length ? raFetchInfo_(ids, forceNotes ? 200 : 150) : {};
   if (forceNotes) raNotesLeft_ = needNote.filter(it => !infos[it.id]).length;
   let triedChanged = false;
-  if (notesOn) ids.forEach(id => { const inf0 = infos[id]; if (inf0 && !(inf0.Achievements && Object.keys(inf0.Achievements).length)) { noteTried[id] = nowMs; triedChanged = true; } });
+  if (notesOn || ptsOn) ids.forEach(id => { const inf0 = infos[id]; if (inf0 && !(inf0.Achievements && Object.keys(inf0.Achievements).length)) { noteTried[id] = nowMs; triedChanged = true; } });
   if (triedChanged) saveJson_(props, 'RA_NOTE_TRIED', noteTried);
   let cacheChanged = false;
   ids.forEach(id => {
@@ -2975,7 +3080,7 @@ function updateRetro_(force, forceNotes) {
 
   // --- Fill the output columns ---
   const { out, orig, put } = outputSet_(data, col,
-    ['appid', 'console', 'genre', 'unlocked', 'hardcore', 'total', 'totalHc', 'lastPlayed', 'completed', 'updated'], cell,
+    ['appid', 'console', 'genre', 'unlocked', 'hardcore', 'total', 'totalHc', 'lastPlayed', 'completed', 'updated', 'ptsDone', 'ptsTotal', 'ptsHc'], cell,
     Object.assign({}, keepRules, { totalHc: keepRules.total }));
   const nameRange = sheet.getRange(top, nameIdx + 1, numRows, 1);
   const notes = nameRange.getNotes();
@@ -3040,6 +3145,10 @@ function updateRetro_(force, forceNotes) {
       if (out.completed) put('completed', i, awarded === total && doneDate ? doneDate : '');
       if (changed) put('updated', i, now);
       setNote(i, it.note);
+      if (ptsOn && inf && inf.Achievements) {                   // points: what you have earned and what the game offers
+        const pts = raPoints_(inf);
+        put('ptsDone', i, pts[0]); put('ptsTotal', i, pts[1]); put('ptsHc', i, pts[2]);
+      }
       if (notesOn) {                                            // the missing-achievements note for COLLECTED ACHIES
         if (awarded >= total) noteU[i] = '';
         else if (inf && inf.Achievements) noteU[i] = missingNote_(raMissing_(inf), false);
@@ -3072,6 +3181,7 @@ function updateRetro_(force, forceNotes) {
         appid: 'ra' + it.id,
         unlocked: out.unlocked[i][0],
         total: out.total[i][0],
+        points: out.ptsTotal && isNum_(out.ptsTotal[i][0]) ? [out.ptsDone ? out.ptsDone[i][0] : null, out.ptsTotal[i][0], out.ptsHc ? out.ptsHc[i][0] : null] : null,
         hardcore: out.hardcore ? out.hardcore[i][0] : hc,
         cover: raImage_(e ? e.ImageIcon : (inf && inf.ImageIcon)),
         newAch: newAch,
@@ -3103,6 +3213,18 @@ function updateRetro_(force, forceNotes) {
   saveJson_(props, 'LAST_UNLOCK', lastUnlock);
   applyPlayStatus_(sheet, headers, nameIdx, numRows);
   return tracked;
+}
+
+// [points you have earned, points the game offers, points earned in hardcore] from a game's achievement list. Hardcore and softcore unlocks both count as earned.
+function raPoints_(inf) {
+  let got = 0, all = 0, hc = 0;
+  Object.keys(inf.Achievements || {}).forEach(k => {
+    const a = inf.Achievements[k], pts = Number(a.Points) || 0;
+    all += pts;
+    if (a.DateEarned || a.DateEarnedHardcore) got += pts;
+    if (a.DateEarnedHardcore) hc += pts;
+  });
+  return [got, all, hc];
 }
 
 // The achievements you have not earned in a RetroAchievements game, easiest (most players) first:
@@ -3176,7 +3298,7 @@ function outputSet_(data, col, keys, cell, keepRules) {
 }
 
 // Text alignment for the number and date columns (header names, so it works on both tabs).
-const ALIGN_CENTER = ['collected achies', 'hardcore achies', 'total achies', 'completed', 'collected hc achies', 'total hc achies', 'hc completed',
+const ALIGN_CENTER = ['collected points', 'collected hc points', 'total points', 'collected achies', 'hardcore achies', 'total achies', 'completed', 'collected hc achies', 'total hc achies', 'hc completed',
   'hours played', 'last played', 'date completed'];
 const ALIGN_RIGHT = ['appid', 'game id', 'amount done', 'hc amount done'];
 
@@ -3387,7 +3509,7 @@ function failureWarning_(err) {
     const last = Number(props.getProperty('FAIL_LAST') || 0), now = Date.now();
     if (now - last < 6 * 3600 * 1000) return;
     props.setProperty('FAIL_LAST', String(now));
-    postDiscord_({ embeds: [{ title: '⚠️ Achievement Tracker update failed', color: 0xe74c3c,
+    postDiscord_({ embeds: [{ title: '⚠️ Achievement Tracker update failed', color: dcColor_(c, 'failure', DC_COLORS.failure),
       description: clip_(err && err.message ? err.message : String(err), 400) + '\n\nThe next update tries again. Open the sheet and run Update now to see the full message.' }] });
   } catch (e) { /* never hide the original error */ }
 }
@@ -3600,6 +3722,11 @@ function buildStats_() {
       put(row++, 'Overall completion', '=IFERROR(B' + rCol + '/B' + rTot + ',0)');
       sh.getRange(row - 1, 2).setNumberFormat('0.0%');
     }
+    const pd = ra.r('collected points'), pt = ra.r('total points');
+    const ph = ra.r('collected hc points');
+    if (pd) put(row++, 'Points earned', '=SUM(' + pd + ')');
+    if (ph) put(row++, 'Hardcore points earned', '=SUM(' + ph + ')');
+    if (pt) put(row++, 'Points available', '=SUM(' + pt + ')');
     if (dh && th) {
       put(row++, 'Games mastered (hardcore 100%)', '=SUMPRODUCT(ISNUMBER(' + th + ')*ISNUMBER(' + dh + ')*(' + th + '>0)*(' + dh + '>=' + th + '))');
       put(row++, 'Hardcore achievements', '=SUM(' + dh + ')');
@@ -3790,4 +3917,120 @@ function renameTabs() {
     return lines.join('\n');
   });
   if (r) alert_(r);
+}
+
+// Adds point columns to the RetroAchievements tab, after the achievement columns. The update fills them (a few games per update;
+// Tools > Import missing achievements does them all) and a SUM is added to the totals rows the tab has.
+function addRetroPointsColumns() { addRetroPoints_(['COLLECTED POINTS', 'TOTAL POINTS']); }
+function addRetroHcPointsColumn() { addRetroPoints_(['COLLECTED HC POINTS']); }
+
+function addRetroPoints_(names) {
+  const r = withLock_(() => {
+    const sheet = retroSheet_(SpreadsheetApp.getActiveSpreadsheet());
+    if (!sheet || isBlankSheet_(sheet)) return 'The "' + cfg_().raSheetName + '" tab is missing or blank. Set it up first.';
+    const headers = headersOf_(sheet);
+    const todo = names.filter(n => headers.indexOf(n.toLowerCase()) === -1);
+    if (!todo.length) return 'The tab already has ' + (names.length > 1 ? 'the points columns.' : 'that column.');
+    // Order: COLLECTED POINTS, COLLECTED HC POINTS, TOTAL POINTS. A new column goes right after the one it follows (or the achievement columns).
+    const follow = { 'COLLECTED POINTS': ['hc completed', 'completed', 'total hc achies', 'total achies'], 'COLLECTED HC POINTS': ['collected points', 'hc completed', 'completed', 'total achies'],
+      'TOTAL POINTS': ['collected hc points', 'collected points', 'hc completed', 'completed', 'total achies'] };
+    todo.forEach(name => {
+      const hs = headersOf_(sheet);
+      const after = (follow[name].map(h => hs.indexOf(h)).filter(i => i >= 0)[0]);
+      const pos = (after === undefined ? hs.length - 1 : after) + 1;
+      sheet.insertColumnAfter(pos);
+      sheet.getRange(1, pos + 1).setValue(name);
+      try { sheet.getRange(1, 1).copyTo(sheet.getRange(1, pos + 1), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false); } catch (e) { /* plain header */ }
+    });
+    // Totals: copy the SUM from the TOTAL ACHIES totals cell, moved to the new column.
+    const h2 = headersOf_(sheet), ti = h2.indexOf('total achies');
+    [totalsRowOf_(sheet, h2), topRow_(sheet) > 2 ? 2 : 0].forEach(tr => {
+      if (!tr || ti < 0) return;
+      const f = String(sheet.getRange(tr, ti + 1).getFormula() || '');
+      if (!/^=SUM\(/i.test(f)) return;
+      todo.forEach(n => {
+        const ci = h2.indexOf(n.toLowerCase()); if (ci < 0 || sheet.getRange(tr, ci + 1).getFormula()) return;
+        sheet.getRange(tr, ci + 1).setFormula(f.replace(new RegExp('\\b' + colLetter_(ti) + '(\\d+)', 'g'), colLetter_(ci) + '$1'));
+      });
+    });
+    return 'Added ' + todo.join(' and ') + '. They fill in over the next updates (20 games each); Tools > Import missing achievements (notes) fills all of them now.';
+  });
+  if (r) alert_(r);
+}
+
+// ---------- Discord look: menu handlers ----------
+function dcColorSet_(key, label) {
+  const v = ask_(label + ' colour', 'Colour for the ' + label + ' as #rrggbb (for example #2ecc71), or "default" for the built-in colour. Currently: ' + (cfg_()['dcColor' + key] || 'default') + '.');
+  if (v === null || v === '') return;
+  if (v.toLowerCase() === 'default') { setCfg_({ ['dcColor' + key]: '' }); buildMenu_(); alert_('The ' + label + ' uses its built-in colour.'); return; }
+  if (!/^#[0-9a-f]{6}$/i.test(v)) { alert_('That is not a colour like #2ecc71. Nothing was changed.'); return; }
+  setCfg_({ ['dcColor' + key]: v.toLowerCase() }); buildMenu_(); alert_('The ' + label + ' colour is now ' + v.toLowerCase() + '.');
+}
+function dcColorCompletion_() { dcColorSet_('Completion', '100% post'); }
+function dcColorLast_() { dcColorSet_('Last', 'last-played post'); }
+function dcColorRare_() { dcColorSet_('Rare', 'rare achievement post'); }
+function dcColorWeekly_() { dcColorSet_('Weekly', 'weekly summary'); }
+function dcColorFailure_() { dcColorSet_('Failure', 'failure warning'); }
+
+function toggleDcHours() { toggle_('dcShowHours', 'Total hours field'); }
+function toggleDcHardcore() { toggle_('dcShowHardcore', 'Hardcore field'); }
+function toggleDcPoints() { toggle_('dcShowPoints', 'Points field'); }
+function toggleDcGames100() { toggle_('dcShowGames100', 'Games at 100% field'); }
+function toggleDcNew() { toggle_('dcShowNew', 'New since last post field'); }
+function toggleDcNewAch() { toggle_('dcShowNewAch', 'Achievement names'); }
+function toggleDcCompact() { toggle_('dcCompact', 'Compact posts'); }
+function toggleDcRoleCompletion() { toggle_('dcRoleCompletion', 'Role mention on 100% posts'); }
+function toggleDcRoleRare() { toggle_('dcRoleRare', 'Role mention on rare posts'); }
+
+function dcImageCycle() {
+  const order = ['default', 'thumb', 'large', 'none'];
+  const next = order[(order.indexOf(cfg_().dcImage || 'default') + 1) % order.length];
+  setCfg_({ dcImage: next }); buildMenu_();
+  alert_('Image style is now: ' + DC_IMAGE_LABEL[next] + (next === 'default' ? ' (Steam: wide image; RetroAchievements: game icon).' : '.'));
+}
+
+function dcTextSet_(key, label, help, max) {
+  const v = ask_(label, help + ' Type "default" to go back to the built-in text. Currently: ' + (cfg_()[key] || 'default') + '.');
+  if (v === null || v === '') return;
+  const val = v.toLowerCase() === 'default' ? '' : v.slice(0, max);
+  setCfg_({ [key]: val }); buildMenu_(); alert_(label + (val ? ' is now: ' + val : ' is back to the default.'));
+}
+const DC_TITLE_HELP = 'You can use {game}, {done}, {total}, {pct}';
+function dcTitleLast_() { dcTextSet_('dcTitleLast', 'Last-played title', DC_TITLE_HELP + ' (for example: Played {game} - {done}/{total}).', 200); }
+function dcTitleCompletion_() { dcTextSet_('dcTitleCompletion', '100% post title', DC_TITLE_HELP + ' and {console} (RetroAchievements).', 200); }
+function dcTitleRare_() { dcTextSet_('dcTitleRare', 'Rare achievement title', 'You can use {name} (the achievement), {game} and {pct}.', 200); }
+
+function dcNameSet_(key, label) {
+  const v = ask_(label, 'Name shown as the sender of these posts (up to 80 characters; Discord does not allow names containing "discord" or "clyde"). Type "default" to use the webhook\'s own name. Currently: ' + (cfg_()[key] || 'webhook default') + '.');
+  if (v === null || v === '') return;
+  if (v.toLowerCase() === 'default') { setCfg_({ [key]: '' }); buildMenu_(); alert_('Using the webhook\'s own name.'); return; }
+  if (/discord|clyde/i.test(v)) { alert_('Discord does not allow that name. Nothing was changed.'); return; }
+  setCfg_({ [key]: v.slice(0, 80) }); buildMenu_(); alert_('Sender name set to "' + v.slice(0, 80) + '".');
+}
+function dcNameSteam_() { dcNameSet_('dcNameSteam', 'Steam posts: sender name'); }
+function dcNameRa_() { dcNameSet_('dcNameRa', 'RetroAchievements posts: sender name'); }
+
+function dcAvatarSet_(key, label) {
+  const v = ask_(label, 'Link (https://...) to the picture used for these posts, or "default" for the webhook\'s own picture. Currently: ' + (cfg_()[key] || 'webhook default') + '.');
+  if (v === null || v === '') return;
+  if (v.toLowerCase() === 'default') { setCfg_({ [key]: '' }); buildMenu_(); alert_('Using the webhook\'s own picture.'); return; }
+  if (!/^https:\/\/\S+$/.test(v)) { alert_('That is not an https:// link. Nothing was changed.'); return; }
+  setCfg_({ [key]: v }); buildMenu_(); alert_('Picture saved.');
+}
+function dcAvatarSteam_() { dcAvatarSet_('dcAvatarSteam', 'Steam posts: sender picture'); }
+function dcAvatarRa_() { dcAvatarSet_('dcAvatarRa', 'RetroAchievements posts: sender picture'); }
+
+function dcRole_() {
+  const v = ask_('Role to mention', 'The number id of the Discord role to ping on 100% and rare posts. (Discord: Server Settings > Roles, right-click the role > Copy Role ID, with Developer Mode on.) Type "none" to stop mentioning. Currently: ' + (cfg_().dcRole || 'none') + '.');
+  if (v === null || v === '') return;
+  if (v.toLowerCase() === 'none') { setCfg_({ dcRole: '' }); buildMenu_(); alert_('No role is mentioned.'); return; }
+  if (!/^\d{5,25}$/.test(v)) { alert_('A role id is just numbers. Nothing was changed.'); return; }
+  setCfg_({ dcRole: v }); buildMenu_(); alert_('Role ' + v + ' will be mentioned on the posts selected in the Role mention menu.');
+}
+
+function resetDcLook() {
+  const d = DEFAULTS, patch = {};
+  Object.keys(d).filter(k => /^dc[A-Z]/.test(k)).forEach(k => { patch[k] = d[k]; });
+  setCfg_(patch); buildMenu_();
+  alert_('The Discord look is back to the defaults.');
 }
