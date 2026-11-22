@@ -11,6 +11,7 @@ No server, hosting or install is needed. Everything runs for free inside Google 
 - **Date completed:** for 100% games, the date of the last achievement you earned (Steam and RetroAchievements).
 - **Family Sharing and free-to-play games:** games you don't own are found through the Steam store and still get achievements.
 - **Genre:** the top genres, filled in once per game.
+- **Wishlist import:** pull your Steam wishlist into GAMES TO BUY with store links and app ids.
 - **Store links:** every Steam game name links to its store page.
 - **Fast:** requests go out in parallel and games are only re-checked when something changed.
 - **Auto-update:** every 1 to 30 minutes, set from the menu.
@@ -20,9 +21,11 @@ No server, hosting or install is needed. Everything runs for free inside Google 
 - **Missing achievements:** a note on each unfinished game's COLLECTED ACHIES cell lists what you still need, easiest first, with the share of players who have each one.
 - **Archived achievements:** achievements Steam has retired are kept out of a game's total when you hold more than the public total.
 - **Rare achievement posts:** a Discord post when you unlock an achievement few players have.
+- **Milestone posts:** a Discord post when you pass a level (100 achievements, 25 games at 100%, 1,000 hours and so on). Options and switches live on a MILESTONES tab.
 - **STATS, HISTORY, PROBLEMS:** a live statistics tab with charts, a daily log of your progress, and a one-click list of games that need attention.
 - **Safety net:** a backup button, a Discord warning when updates fail, and updates that stop cleanly before Google's time limit.
 - **RetroAchievements:** an optional second tab, including games you haven't played yet.
+- **Mobile page:** a private phone page over your sheet with quick wins, progress over time, milestones, game banners, themes, and a few edits (status, notes, games to buy). See [Mobile page](#mobile-page-phone).
 - **Self-setting-up:** on a blank sheet it builds the headers, formulas, colours and totals row. New rows get their formulas copied down, and **Add game rows** extends the list.
 - **Cell update rules:** choose, column by column, whether the script overwrites a cell or keeps what you typed.
 - **Settings menu:** every option is in the menu, grouped by category, so there is no need to edit code.
@@ -71,7 +74,7 @@ No server, hosting or install is needed. Everything runs for free inside Google 
 | `HOURS PLAYED` | script | Required. |
 | `LAST PLAYED` | script | Required. |
 | `LAST UPDATED` | script | Required. |
-| `DATE COMPLETED` | script | Optional. **Sheet setup → Add DATE COMPLETED column** adds it before `LAST UPDATED`. |
+| `DATE COMPLETED` | script | Optional. **Sheet setup → Add columns → Steam: DATE COMPLETED** adds it before `LAST UPDATED`. |
 | `AMOUNT DONE`, `PROGRESS`, `COMPLETED` | formulas | Optional. Copied down to new game rows for you. |
 | `GENRE` | script | Optional. Add a column with this header to turn it on. |
 | `STATUS` | script | Optional. Added automatically to the empty column right after `LAST UPDATED`. |
@@ -94,9 +97,9 @@ Run **Achievement Tracker → Settings → Updates → Auto-update**. It default
 |---|---|
 | **Update now**, **Update + post last played to Discord**, **Post weekly summary now (preview)** | The everyday actions. |
 | **Sort the list** | The sort options and the sort range. |
-| **Add games** | Import Steam library games with achievements, Import RetroAchievements Want to Play list, Add game rows. |
-| **Sheet setup** | Set up blank sheet, Set up RetroAchievements tab, Add BACKLOG STATUS / DATE COMPLETED columns, Add totals to top, Add GAMES TO BUY column, Rename tabs to STEAM and RETRO, Add RetroAchievements points columns, Add hardcore points column, Upgrade RetroAchievements columns (hardcore), Apply text alignment (all tabs), and an **Optional tabs** submenu: Build STATS tab and the Progress history switch. |
-| **Tools** | Problems report and Diagnose selected game; Link GAMES TO BUY to the Steam store and Sort GAMES TO BUY A-Z; Import missing achievements (notes) and Back up the tabs; Send test 100% post to Discord. |
+| **Add games** | Import Steam library games with achievements, Import RetroAchievements Want to Play list, **Import Steam wishlist into GAMES TO BUY**, Add game rows. |
+| **Sheet setup** | Set up blank sheet, Set up RetroAchievements tab, an **Add columns** submenu (Steam: BACKLOG STATUS, DATE COMPLETED, GAMES TO BUY; RetroAchievements: GAME ID, points, hardcore points), Add totals to top, Rename tabs to STEAM and RETRO, Upgrade RetroAchievements columns (hardcore), Apply text alignment, and the Optional tabs submenu (STATS, HISTORY, MILESTONES). |
+| **Tools** | Problems report and Diagnose selected game; Import missing achievements (notes); a **GAMES TO BUY** submenu (Link to the Steam store, Sort A to Z); Mobile page (link and setup); Back up the tabs; Send test 100% post to Discord; Send test milestone post to Discord. |
 | **Settings → Accounts** | Steam API key and ID, RetroAchievements username and key, Discord webhook. |
 | **Settings → Updates** | Auto-update on/off and frequency (1, 5, 10, 15 or 30 min), how long a recently played game keeps being re-checked, and how often family-shared and free-to-play games are re-checked (default every 60 minutes; Steam reports no playtime for them, so they run on a timer). |
 | **Settings → Sheets & columns** | Steam tab name, rows on a new sheet, store links, genre and status columns. Turning **Link game names** off removes the Steam links the script added and resets those names to plain text (links you added yourself are left alone). |
@@ -116,13 +119,13 @@ The `DATE COMPLETED` column holds the date of the **last achievement you earned*
 
 - **Steam:** the date comes from the unlock times Steam already reports for your earned achievements. A finished game with no date is fetched straight away, so adding the column fills in your existing 100% games on the next update. If Steam has no unlock times for a game, the cell stays blank.
 - **RetroAchievements:** the date of your most recent earned achievement in that game (hardcore or softcore).
-- **Add it:** **Sheet setup → Add DATE COMPLETED column** inserts it between `LAST PLAYED` and `LAST UPDATED` on the tab you are looking at. New blank sheets include it.
+- **Add it:** **Sheet setup → Add columns → Steam: DATE COMPLETED** inserts it between `LAST PLAYED` and `LAST UPDATED` on the tab you are looking at. New blank sheets include it.
 - **Sort:** **Sort the list → Date completed (newest first / oldest first)**. Games without a date go last.
 - **Rule:** under **Cell update rules** you can set `DATE COMPLETED` to keep your edits.
 
 ## Backlog status column
 
-Run **Sheet setup → Add BACKLOG STATUS column** to add it to the tab you are looking at (Steam or RetroAchievements). It inserts a `BACKLOG STATUS` column directly left of GAME LIST and fills it. Everything to its right shifts over by one, and formulas, links and lists move with it. Running it again just refreshes the column. You can also add it by hand: make a column anywhere on the sheet with the header `BACKLOG STATUS` (`PLAY STATUS` or `BACKLOG` also work).
+Run **Sheet setup → Add columns → Steam: BACKLOG STATUS** to add it to the tab you are looking at (Steam or RetroAchievements). It inserts a `BACKLOG STATUS` column directly left of GAME LIST and fills it. Everything to its right shifts over by one, and formulas, links and lists move with it. Running it again just refreshes the column. You can also add it by hand: make a column anywhere on the sheet with the header `BACKLOG STATUS` (`PLAY STATUS` or `BACKLOG` also work).
 
 On every update the script writes text into the column:
 
@@ -180,15 +183,26 @@ Sorting only reorders the game table, so lists next to it and the totals row are
 
 ## GAMES TO BUY column
 
-A column for games you want but don't own yet. Type the names under a header called **GAMES TO BUY**, then run **Tools → Link GAMES TO BUY to the Steam store**. Each name becomes a link to its Steam store page.
+A column for games you want but don't own yet. Type the names under a header called **GAMES TO BUY**, then run **Tools → GAMES TO BUY → Link to the Steam store**. Each name becomes a link to its Steam store page.
 
-- **Sheet setup → Add GAMES TO BUY column** adds the header for you (one empty column away from your table). If you already have a column with that header, it is used as is.
+- **Sheet setup → Add columns → Steam: GAMES TO BUY** adds the header for you (one empty column away from your table). If you already have a column with that header, it is used as is.
 - **BUY APPID** (optional): Add GAMES TO BUY column also adds this column right next to it (columns to the right move over by one). Linking fills it with each game's Steam app id. It fills empty cells and cells whose link just changed, so an id you type or fix by hand is kept. Sorting moves the ids with their names. If a name can't be found on the store, the link is built from the app id in this column instead (the cell gets a note saying so), so you can type an id for games the search misses.
 - Only the text is kept: names are never changed and nothing else is written to the column.
 - If the store's name is not exactly what you typed, the cell gets a note saying which game it linked to, so a wrong match is easy to spot.
 - Links you added yourself are left alone. Names not found on the store are listed in the result.
-- **Tools → Sort GAMES TO BUY A-Z** sorts just this column (A-Z, blanks last). The rest of the sheet doesn't move, and links and notes stay with their names.
+- **Tools → GAMES TO BUY → Sort A to Z** sorts just this column (A-Z, blanks last). The rest of the sheet doesn't move, and links and notes stay with their names.
 - Lookups use the official Steam store search. They are remembered, so running it again only searches new names. Big lists finish over a few runs.
+
+### Import your Steam wishlist
+
+**Add games → Import Steam wishlist into GAMES TO BUY** reads your Steam wishlist (the official Steam Web API) and adds it under GAMES TO BUY, in your wishlist priority order, each with its store link and app id.
+
+- It skips games you already own (matched by app id on the Steam tab) and games already in the list (by app id or name). Run it again any time: only new wishlist games are added.
+- It adds the GAMES TO BUY and BUY APPID columns first if they are missing.
+- Your wishlist has to be visible: in Steam open your profile → Edit Profile → Privacy Settings and set **Game details** to **Public**. If Steam returns an empty list, the script says so.
+- New games are added below the last name in the column. **Tools → GAMES TO BUY → Sort A to Z** alphabetises the list.
+- Names come from the store 40 at a time; a few that can't be named right now are left for the next run.
+
 
 ## Importing your library
 
@@ -249,7 +263,43 @@ The RetroAchievements tab carries over Discord posts (last played, 100% completi
 
 ## RetroAchievements points
 
-**Sheet setup → Add RetroAchievements points columns** adds **COLLECTED POINTS** and **TOTAL POINTS** to the RETRO tab (after the achievement columns, with totals where the tab has them). Points come from each achievement's points on RetroAchievements; COLLECTED POINTS counts every unlock (hardcore and softcore), and TOTAL POINTS is what the game offers overall. **Sheet setup → Add hardcore points column (RetroAchievements)** adds **COLLECTED HC POINTS** between them, so you can see hardcore points separately from your overall points. Because points need each game's achievement list, a normal update fills 20 games at a time; **Tools → Import missing achievements (notes)** fills every game at once. A game is refreshed when its collected count changes. STATS shows points earned, hardcore points and points available, and the 100% post shows them for RetroAchievements games.
+**Sheet setup → Add columns → RetroAchievements: points** adds **COLLECTED POINTS** and **TOTAL POINTS** to the RETRO tab (after the achievement columns, with totals where the tab has them). Points come from each achievement's points on RetroAchievements; COLLECTED POINTS counts every unlock (hardcore and softcore), and TOTAL POINTS is what the game offers overall. **Sheet setup → Add hardcore points column (RetroAchievements)** adds **COLLECTED HC POINTS** between them, so you can see hardcore points separately from your overall points. Because points need each game's achievement list, a normal update fills 20 games at a time; **Tools → Import missing achievements (notes)** fills every game at once. A game is refreshed when its collected count changes. STATS shows points earned, hardcore points and points available, and the 100% post shows them for RetroAchievements games.
+
+## Mobile page (phone)
+
+A phone-friendly page over your sheet. Open it from the home screen like an app.
+
+- **Overview:** completion ring, totals, hours, this week and backlog status, plus:
+  - **Almost there:** games that are 1 to 3 achievements from 100%.
+  - **Quick wins:** the easiest achievements across all your games (the share of players who have each one, read from the missing-achievements notes; run **Tools → Import missing achievements** first).
+  - **Progress:** a chart of achievements collected over 30 days, 90 days or all time. One line of totals is saved per day whenever the page loads or an update runs, so the chart fills in as days pass.
+  - **Milestones:** badges reached and your next target for achievements, 100% games, hours, and RetroAchievements mastered games and points.
+  - **Recent unlocks** and recently played games.
+- **Games, Retro, To buy:** searchable lists. Games has status filters and sorting; Retro sorts by progress, A to Z or points; To buy has a search box and an **Add a game** box.
+- **Game detail:** the Steam banner (or the RetroAchievements icon and screenshot) behind the title, the achievements you still need, a **status** you can change (Backlog, Active, Idle, Completed), and **My note** for your own comment on the game.
+- **Opens fast:** the last data it loaded is kept on the phone and shown straight away while it refreshes.
+- **Options:** themes, accent colour and your own colours (per device), plus buttons for the Discord server and Patreon.
+- **Games to buy:** each game with a store link or app id shows its Steam banner behind the name.
+- **Games list:** when sorted by most hours, each game shows its hours played.
+
+The changes you can make from the phone are only: a game's backlog status, your own note on a game, and adding a name to GAMES TO BUY. They are written to the sheet (notes are kept in the script). Because of this, keep **Who has access** on **Only myself**. For RetroAchievements pictures the RETRO tab needs a GAME ID column: **Sheet setup → Add columns → RetroAchievements: GAME ID**.
+
+**Set up once**
+1. Open the sheet and run **Tools → Mobile page (link and setup)**. This saves the sheet for the page.
+2. In the script editor click **Deploy → New deployment**, pick **Web app**, set **Execute as: Me** and **Who has access: Only myself**, then **Deploy** and allow access.
+3. Run **Tools → Mobile page (link and setup)** again to see the link (or copy the Web app URL from the deployment).
+4. Open the link on your phone signed in to the same Google account, then use the browser menu → **Add to Home screen**.
+
+After you change the script, publish the change to the page with **Deploy → Manage deployments → edit → New version**.
+
+- It only reads the sheet and runs the normal update. Sorting, adding columns and settings stay in the sheet's menu.
+- The page and its functions refuse anyone who isn't you. Keep the access setting on **Only myself**.
+- Games load in one go, so a very long list takes a moment on the first open.
+
+**Options tab (colours and full screen)**
+- **Settings are per person.** Each phone or browser keeps its own theme and colours. Only the script's owner can change the shared defaults that new devices start with; if Google can't confirm who you are, your changes stay on your device.
+- The gear tab picks a theme (Dark, Black, Light, Midnight, Forest, Mocha, Paper, Custom, or Match phone) and an accent colour (six presets or any colour you choose). Low-contrast accents are adjusted automatically so text stays readable. **Your own theme:** choose a background, card and text colour and the page works out the rest; text that would be hard to read is corrected. Your choice is saved in the script and on the phone, and **Reset to defaults** undoes it.
+- **Hiding the address bar:** the reliable way is the browser menu → **Add to Home screen**, then open the page from the new icon; it opens without the address bar. The page also asks to open as an app. Google shows web apps inside its own frame, so a plain browser tab may keep its bar; the **Hide the address bar** button tries full screen and works only on some browsers. After deploying a new version, add the home-screen icon again.
 
 ## Missing achievements notes
 
@@ -278,6 +328,25 @@ Both are optional and are never created by an update; you set them up from **She
 ## Back up the tabs
 
 **Tools → Back up the tabs** copies the Steam and RetroAchievements tabs into tabs named `Backup <date and time> <tab>`. The newest 8 backup tabs are kept and older ones are removed. Worth doing before a big import, sort or format.
+
+## Milestone posts
+
+**Sheet setup → Optional tabs → MILESTONES tab** adds a tab that holds every option, so you change them right in the sheet. Nothing is posted until the tab exists.
+
+| Setting on the tab | What it does |
+|---|---|
+| Post milestones to Discord | The master switch (a checkbox). |
+| Post milestones you already passed (first run only) | Off by default: the first update after you build the tab only notes where you are, so Discord isn't flooded. Turn it on before that first update to post what you've already passed. |
+| Mention the Discord role | Adds the role from **Discord look → Role mention** to milestone posts. |
+| Show the next target | Adds the next level to each post. |
+| Post colour, Post title | A colour like `#f1c40f`; the title can use `{metric}` and `{value}`. |
+
+Below the settings is one row per milestone type: **Achievements collected, Games at 100%, Hours played, Retro games mastered, Retro points**. Each has a **Post?** checkbox and a **Levels** list you can edit (comma separated, for example `100, 250, 500, 1000`). The **Now**, **Last reached** and **Next level** columns fill in on every update.
+
+- A post goes out once per level, after an update finds you past it. If one update passes several levels of the same type, you get one post for the highest and it lists the others as "Also passed".
+- Switching a type off keeps its progress quiet: turning it back on doesn't replay what you passed meanwhile. With no Discord webhook set, levels are kept and posted once it is.
+- Respects Discord look: sender names and pictures, compact posts. **Tools → Send test milestone post to Discord** sends a sample.
+- Rebuilding the tab (the same menu item) keeps your settings.
 
 ## Test the 100% post
 
@@ -348,14 +417,35 @@ The STATUS column holds a short label. **Hover over the cell** for a note explai
 
 ## Limits
 
+- **Daily web-request limit:** Google lets a script make a fixed number of web requests per day (about 20,000 for a personal Google account). If you see *Service invoked too many times for one day: urlfetch*, the limit was reached. It resets around midnight Pacific time (3 AM Eastern). The script then pauses scheduled updates until the reset instead of failing every few minutes, and shows a clear message if you run an update yourself. To use fewer requests, set Settings → Updates → Auto-update to 5 or 10 minutes and run **Import missing achievements** no more than once a day. **Extensions → Apps Script → Executions** shows which functions used the most.
+
 Google Apps Script has daily quotas. A normal list updates well within them, but if you track thousands of games or run it every minute you may reach them. Steam's and RetroAchievements' web APIs limit very fast request bursts, which the script handles by pausing and retrying. A run stops fetching after about 4.5 minutes so Google's 6 minute limit never cuts it off; games it didn't reach show `Retrying` and are done on the next update. Discord posts that hit Discord's rate limit are retried, and a 100% post Discord rejects is sent again on the next update.
 
 ## Privacy and security
 
 - Your Steam API key, Steam ID, RetroAchievements key and Discord webhook are stored in the script's private **Script Properties**, **not** in the code. It is safe to share or commit `SteamTracker.gs`.
 - Never paste your keys or webhook URL into the code, a commit, or a public issue.
+- The mobile page loads game pictures from Steam's and RetroAchievements' image servers in your browser. It keeps the last data it loaded on your phone (browser storage) so it opens fast; clear the site data to remove it.
 - The script talks only to Steam (`api.steampowered.com`, `store.steampowered.com`), RetroAchievements (`retroachievements.org`) and your Discord webhook.
 
 ## Updating
 
 Replace the code in **Extensions → Apps Script** with the newer `SteamTracker.gs`, save, and reload the sheet. Your settings and saved details are kept. See `CHANGELOG.md` for what changed.
+
+### Updating the mobile page (deployment)
+
+The phone page runs from a *deployment* of the script. Saving new code does **not** change what the page shows: you have to publish a new version of the deployment. Do this after every code update:
+
+1. Open the sheet, then **Extensions → Apps Script**, and paste in the new `SteamTracker.gs`. Click **Save**.
+2. Click **Deploy → Manage deployments**.
+3. Next to your web app deployment click the **pencil (Edit)** icon.
+4. Under **Version** choose **New version**. Leave **Execute as: Me** and **Who has access: Only myself** as they are.
+5. Click **Deploy**, then **Done**. The link stays the same, so you don't need a new one.
+6. On your phone, close the page and open it again (pull down to reload if it still looks old). If it is installed on your home screen and doesn't change, remove the icon and use **Add to Home screen** again.
+
+Notes:
+- **Always choose Edit → New version.** Choosing **New deployment** creates a second link and leaves the old one on the old code.
+- The first time after a change that needs new permissions, Google may ask you to **Review permissions** and allow access again.
+- If you lose the link, run **Tools → Mobile page (link and setup)** in the sheet to see it again.
+- If the page shows an old version after redeploying, check that **Version** says the newest number and not an earlier one.
+- Menu changes in the sheet only need a reload of the sheet. Only the phone page needs the new deployment version.
