@@ -187,40 +187,52 @@ function buildMenu_() {
   const addMenu = ui.createMenu('Add games')
     .addItem('Import Steam library games with achievements\u2026', 'importLibrary')
     .addItem('Import RetroAchievements Want to Play list', 'importWantToPlay')
+    .addItem('Import Steam wishlist into GAMES TO BUY', 'importWishlist')
     .addSeparator()
     .addItem('Add game rows\u2026', 'addGameRows');
 
   const optionalMenu = ui.createMenu('Optional tabs')
     .addItem('Build STATS tab (formulas and charts)', 'buildStats')
-    .addItem('Progress history (HISTORY tab): ' + onOff(historyOn_()) + ' (click to switch)', 'toggleHistory');
+    .addItem('Progress history (HISTORY tab): ' + onOff(historyOn_()) + ' (click to switch)', 'toggleHistory')
+    .addItem('MILESTONES tab (Discord milestone posts)', 'buildMilestones');
+
+  const columnsMenu = ui.createMenu('Add columns')
+    .addItem('Steam: BACKLOG STATUS', 'addPlayStatusColumn')
+    .addItem('Steam: DATE COMPLETED', 'addDateCompletedColumn')
+    .addItem('Steam: GAMES TO BUY (with BUY APPID)', 'addBuyColumn')
+    .addSeparator()
+    .addItem('RetroAchievements: GAME ID (and fill it)', 'addRetroGameId')
+    .addItem('RetroAchievements: points', 'addRetroPointsColumns')
+    .addItem('RetroAchievements: hardcore points', 'addRetroHcPointsColumn');
 
   const setupMenu = ui.createMenu('Sheet setup')
     .addItem('Set up blank sheet (Steam)', 'setupSheet')
     .addItem('Set up RetroAchievements tab', 'setupRetroSheet')
     .addSeparator()
-    .addItem('Add BACKLOG STATUS column', 'addPlayStatusColumn')
-    .addItem('Add DATE COMPLETED column', 'addDateCompletedColumn')
+    .addSubMenu(columnsMenu)
     .addItem('Add totals to top', 'addTopTotals')
-    .addItem('Add GAMES TO BUY column', 'addBuyColumn')
-    .addItem('Rename tabs to STEAM and RETRO', 'renameTabs')
-    .addItem('Add RetroAchievements points columns', 'addRetroPointsColumns')
-    .addItem('Add hardcore points column (RetroAchievements)', 'addRetroHcPointsColumn')
-    .addItem('Upgrade RetroAchievements columns (hardcore)', 'upgradeRetroLayout')
     .addSeparator()
+    .addItem('Rename tabs to STEAM and RETRO', 'renameTabs')
+    .addItem('Upgrade RetroAchievements columns (hardcore)', 'upgradeRetroLayout')
     .addItem('Apply text alignment (all tabs)', 'applyFormatting')
     .addSeparator()
     .addSubMenu(optionalMenu);
+
+  const buyMenu = ui.createMenu('GAMES TO BUY')
+    .addItem('Link to the Steam store', 'linkGamesToBuy')
+    .addItem('Sort A to Z', 'sortBuyColumn');
 
   const toolsMenu = ui.createMenu('Tools')
     .addItem('Problems report', 'problemsReport')
     .addItem('Diagnose selected game', 'diagnoseGame')
     .addSeparator()
-    .addItem('Link GAMES TO BUY to the Steam store', 'linkGamesToBuy')
-    .addItem('Sort GAMES TO BUY A-Z', 'sortBuyColumn')
     .addItem('Import missing achievements (notes)', 'importMissingNotes')
-    .addItem('Back up the tabs', 'backupTabs')
+    .addSubMenu(buyMenu)
+    .addItem('Mobile page (link and setup)', 'mobilePageSetup')
     .addSeparator()
-    .addItem('Send test 100% post to Discord', 'sendTestCompletion');
+    .addItem('Back up the tabs', 'backupTabs')
+    .addItem('Send test 100% post to Discord', 'sendTestCompletion')
+    .addItem('Send test milestone post to Discord', 'sendTestMilestone');
 
   const accounts = ui.createMenu('Accounts')
     .addItem('Steam API key & Steam ID', 'setupCredentials')
@@ -307,7 +319,9 @@ function buildMenu_() {
     .addItem('Rare achievement posts: ' + onOff(c.postRare), 'toggleRare')
     .addItem('Rare means under: ' + c.rarePct + '% of players (change)', 'settingRarePct')
     .addItem('Weekly summary: ' + onOff(c.weeklyOn), 'toggleWeekly')
-    .addItem('Weekly summary time: ' + DAY_NAMES[c.weeklyDay] + ' ' + c.weeklyHour + ':00 (change)', 'settingWeeklyTime');
+    .addItem('Weekly summary time: ' + DAY_NAMES[c.weeklyDay] + ' ' + c.weeklyHour + ':00 (change)', 'settingWeeklyTime')
+    .addSeparator()
+    .addItem('Milestone posts: options are on the MILESTONES tab (open)', 'openMilestones');
 
   const settings = ui.createMenu('Settings')
     .addSubMenu(accounts)
@@ -650,10 +664,26 @@ function withLock_(fn, waitMs) {
 // Updates the Steam tab, then the RetroAchievements tab (if turned on), then sends the Discord posts.
 // A run stops fetching new data after this long, so Apps Script's 6 minute limit never cuts it off half way.
 let RUN_T0 = Date.now();
+let RUN_MANUAL_ = false;                                 // true for runs started by a person on the phone page
+// Google limits web requests per day. When that limit is hit, scheduled runs wait quietly until it resets instead of failing over and over.
+const QUOTA_MSG = 'Google\'s daily limit for web requests was reached (Service invoked too many times: urlfetch). It resets around midnight Pacific time (3 AM Eastern). Updates will pause until then. To use fewer requests: set Settings > Updates > Auto-update to 5 or 10 minutes and avoid running Import missing achievements more than once a day.';
+const isQuotaError_ = e => /Service invoked too many times/i.test(String(e && e.message ? e.message : e));
+function uiAvailable_() { try { SpreadsheetApp.getUi(); return true; } catch (e) { return false; } }
+function quotaPause_() {
+  let mins = 6 * 60;
+  try {
+    const hm = Utilities.formatDate(new Date(), 'America/Los_Angeles', 'HH:mm').split(':');
+    mins = (24 * 60 - (Number(hm[0]) * 60 + Number(hm[1]))) + 10;
+  } catch (e) { /* fall back to six hours */ }
+  if (!isFinite(mins) || mins < 10 || mins > 24 * 60 + 10) mins = 6 * 60;
+  PropertiesService.getScriptProperties().setProperty('QUOTA_UNTIL', String(Date.now() + mins * 60000));
+}
 const RUN_BUDGET_MS = 270000;
 function overBudget_() { return Date.now() - RUN_T0 > RUN_BUDGET_MS; }
 
 function run_(force, weeklyNow) {
+  const until = Number(PropertiesService.getScriptProperties().getProperty('QUOTA_UNTIL') || 0);
+  if (until > Date.now() && !RUN_MANUAL_ && !uiAvailable_()) return;      // scheduled run during a quota pause: skip quietly
   withLock_(() => {
     RUN_T0 = Date.now();
     const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
@@ -663,12 +693,21 @@ function run_(force, weeklyNow) {
     if (cfg_().raOn) {
       try { tracked = tracked.concat(updateRetro_(force) || []); } catch (e) { errors.push(e); }
     }
-    if (errors.length) { failureWarning_(errors[0]); throw errors[0]; }
+    if (errors.length) {
+      if (isQuotaError_(errors[0])) { quotaPause_(); throw new Error(QUOTA_MSG); }
+      failureWarning_(errors[0]); throw errors[0];
+    }
+    PropertiesService.getScriptProperties().deleteProperty('QUOTA_UNTIL');
     // A game listed twice on a sheet is only counted once in Discord posts.
     const seenKeys = {};
     tracked = tracked.filter(t => { const k = (t.src || 'steam') + ':' + t.appid; if (seenKeys[k]) return false; seenKeys[k] = true; return true; });
     notifyDiscord_(tracked, force, weeklyNow, tz);
     try { logHistory_(tracked, tz); } catch (e) { /* the log is optional */ }
+    try {
+      const totals = mobileBuild_(SpreadsheetApp.getActiveSpreadsheet());
+      try { mobileRecord_(totals); } catch (e) { /* the progress history is optional */ }
+      try { postMilestones_(totals); } catch (e) { /* milestone posts are optional */ }
+    } catch (e) { /* totals are optional */ }
   });
 }
 
@@ -1228,7 +1267,7 @@ function dcSend_(embed, src, kind) {
   if (name) payload.username = String(name).slice(0, 80);
   if (/^https:\/\//.test(String(pic))) payload.avatar_url = pic;
   const role = String(c.dcRole || '');
-  if (/^\d{5,25}$/.test(role) && ((kind === 'completion' && c.dcRoleCompletion) || (kind === 'rare' && c.dcRoleRare))) {
+  if (/^\d{5,25}$/.test(role) && ((kind === 'completion' && c.dcRoleCompletion) || (kind === 'rare' && c.dcRoleRare) || kind === 'milestone')) {
     payload.content = '<@&' + role + '>';
     payload.allowed_mentions = { parse: [], roles: [role] };
   }
@@ -3766,7 +3805,11 @@ const BUY_ID_HEADER = 'BUY APPID';   // optional column right next to GAMES TO B
 const BUY_URL = /^https:\/\/store\.steampowered\.com\/app\/(\d+)\//;
 
 function addBuyColumn() {
-  const r = withLock_(() => {
+  const r = withLock_(addBuyColumn_);
+  if (r) alert_(r);
+}
+function addBuyColumn_() {
+  {
     const sheet = steamSheet_(SpreadsheetApp.getActiveSpreadsheet());
     if (!sheet || isBlankSheet_(sheet)) return 'Set up the Steam tab first.';
     const headers = headersOf_(sheet);
@@ -3787,9 +3830,8 @@ function addBuyColumn() {
       try { sheet.getRange(1, 1).copyTo(sheet.getRange(1, col + 1), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false); } catch (e) { /* plain header */ }
       msg += 'Added a ' + BUY_ID_HEADER + ' column next to it (columns to the right moved over by one). ';
     }
-    return msg + 'Type game names under ' + BUY_HEADER + ', then run Tools > Link GAMES TO BUY to the Steam store.';
-  });
-  if (r) alert_(r);
+    return msg + 'Type game names under ' + BUY_HEADER + ', then run Tools > GAMES TO BUY > Link to the Steam store.';
+  }
 }
 
 function linkGamesToBuy() {
@@ -3804,7 +3846,7 @@ function linkGamesToBuy_() {
   if (!sheet || isBlankSheet_(sheet)) return 'There is no Steam tab to work on.';
   const headers = headersOf_(sheet);
   const i = headers.indexOf(BUY_HEADER.toLowerCase());
-  if (i < 0) return 'The "' + sheet.getName() + '" tab has no ' + BUY_HEADER + ' column. Add one with Sheet setup > Add GAMES TO BUY column, or put the header ' + BUY_HEADER + ' in row 1.';
+  if (i < 0) return 'The "' + sheet.getName() + '" tab has no ' + BUY_HEADER + ' column. Add one with Sheet setup > Add columns > Steam: GAMES TO BUY, or put the header ' + BUY_HEADER + ' in row 1.';
   const top = topRow_(sheet), n = sheet.getLastRow() - top + 1;
   if (n < 1) return 'The ' + BUY_HEADER + ' column is empty.';
   const props = PropertiesService.getScriptProperties();
@@ -3877,13 +3919,111 @@ function linkGamesToBuy_() {
     (left ? '\n\n' + left + ' names are still to do (the Steam store limits requests). Run it again to finish.' : '');
 }
 
+// ---------- Steam wishlist -> GAMES TO BUY ----------
+// Reads your public wishlist (official Steam Web API), skips games you own or already listed, and adds the rest under GAMES TO BUY
+// with their store link and app id. Run it again any time: only new wishlist games are added.
+function importWishlist() {
+  let r;
+  try { r = withLock_(() => { RUN_T0 = Date.now(); return importWishlist_(); }); }
+  catch (e) { r = 'Importing the wishlist stopped with an error:\n\n' + (isQuotaError_(e) ? QUOTA_MSG : (e && e.message ? e.message : e)); }
+  if (r) alert_(r);
+}
+
+function importWishlist_() {
+  const props = PropertiesService.getScriptProperties(), key = props.getProperty('STEAM_API_KEY');
+  let steamId = props.getProperty('STEAM_ID');
+  if (!key || !steamId) return 'Set your Steam API key and Steam ID first (Settings > Accounts).';
+  if (!/^\d{17}$/.test(steamId)) { steamId = resolveVanity_(key, steamId); props.setProperty('STEAM_ID', steamId); }
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), sheet = steamSheet_(ss);
+  if (!sheet || isBlankSheet_(sheet)) return 'Set up the Steam tab first.';
+  let note = '';
+  if (headersOf_(sheet).indexOf(BUY_HEADER.toLowerCase()) === -1 || headersOf_(sheet).indexOf(BUY_ID_HEADER.toLowerCase()) === -1) { addBuyColumn_(); note = 'Added the GAMES TO BUY and BUY APPID columns first.\n\n'; }
+  const headers = headersOf_(sheet), bi = headers.indexOf(BUY_HEADER.toLowerCase()), ii = headers.indexOf(BUY_ID_HEADER.toLowerCase());
+
+  // 1. The wishlist: app ids in your priority order.
+  const res = UrlFetchApp.fetch('https://api.steampowered.com/IWishlistService/GetWishlist/v1/?steamid=' + encodeURIComponent(steamId), { muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) return note + 'Steam did not return your wishlist (code ' + res.getResponseCode() + '). Try again in a few minutes.';
+  let items = [];
+  try { items = (JSON.parse(res.getContentText()).response || {}).items || []; } catch (e) { items = []; }
+  if (!items.length) return note + 'Your wishlist came back empty. If it is not empty, make it visible: in Steam open your profile > Edit Profile > Privacy Settings and set Game details to Public.';
+  items.sort((a, b) => ((a.priority > 0 ? a.priority : 1e9) - (b.priority > 0 ? b.priority : 1e9)) || ((b.date_added || 0) - (a.date_added || 0)));
+
+  // 2. What to leave out: games you own, and games already in the list (by app id or by name).
+  const top = topRow_(sheet), last = Math.max(sheet.getLastRow(), top), n = last - top + 1;
+  const skipIds = {}, skipNames = {};
+  const ai = headers.indexOf('appid');
+  if (ai >= 0) sheet.getRange(top, ai + 1, n, 1).getValues().forEach(v => { const id = Math.floor(Number(v[0])); if (id > 0) skipIds[id] = 'owned'; });
+  const buyRich = sheet.getRange(top, bi + 1, n, 1).getRichTextValues();
+  let lastFilled = -1;
+  buyRich.forEach((v, k) => {
+    const t = String(v[0].getText()).trim();
+    if (!t) return;
+    lastFilled = k; skipNames[norm_(t)] = true;
+    const m = BUY_URL.exec(String(v[0].getLinkUrl() || '')); if (m && !skipIds[m[1]]) skipIds[m[1]] = 'listed';
+  });
+  if (ii >= 0) sheet.getRange(top, ii + 1, n, 1).getValues().forEach(v => { const id = Math.floor(Number(v[0])); if (id > 0 && !skipIds[id]) skipIds[id] = 'listed'; });
+  let owned = 0, listed = 0;
+  const fresh = [];
+  items.forEach(it => {
+    const id = Math.floor(Number(it.appid));
+    if (!(id > 0)) return;
+    if (skipIds[id] === 'owned') owned++;
+    else if (skipIds[id] === 'listed') listed++;
+    else fresh.push(id);
+  });
+  if (!fresh.length) return note + 'Nothing new to add: ' + items.length + ' wishlist games, ' + owned + ' already owned and ' + listed + ' already in GAMES TO BUY.';
+
+  // 3. Names from the store, 40 at a time.
+  const names = {};
+  const batches = [];
+  for (let i = 0; i < fresh.length; i += 40) batches.push(fresh.slice(i, i + 40));      // Google refuses web addresses over 2,048 characters
+  const resp = UrlFetchApp.fetchAll(batches.map(b => ({
+    url: 'https://api.steampowered.com/IStoreBrowseService/GetItems/v1/?key=' + encodeURIComponent(key) + '&input_json=' +
+      encodeURIComponent(JSON.stringify({ ids: b.map(id => ({ appid: id })), context: { language: 'english', country_code: 'US' }, data_request: {} })),
+    muteHttpExceptions: true
+  })));
+  resp.forEach(r => {
+    try { (JSON.parse(r.getContentText()).response.store_items || []).forEach(it => { const id = Math.floor(Number(it.appid || it.id)); if (id > 0 && it.name) names[id] = String(it.name); }); } catch (e) { /* those names are tried one by one below */ }
+  });
+  // Any name still missing is asked for one by one (the store limits this, so only a few per run).
+  let slow = 0;
+  fresh.filter(id => !names[id]).slice(0, 30).forEach(id => {
+    if (slow++ > 0) Utilities.sleep(700);
+    try {
+      const j = JSON.parse(UrlFetchApp.fetch('https://store.steampowered.com/api/appdetails?appids=' + id + '&filters=basic', { muteHttpExceptions: true }).getContentText());
+      if (j && j[id] && j[id].success && j[id].data && j[id].data.name) names[id] = String(j[id].data.name);
+    } catch (e) { /* left for the next run */ }
+  });
+  const add = fresh.filter(id => names[id] && !skipNames[norm_(names[id])]);
+  const noName = fresh.filter(id => !names[id]).length, dupName = fresh.filter(id => names[id] && skipNames[norm_(names[id])]).length;
+  if (!add.length) return note + 'Nothing new to add. ' + (noName ? noName + ' wishlist games could not be named right now; run it again later.' : '');
+
+  // 4. Write the block under the last name in the column: names, store links and app ids.
+  const start = (lastFilled >= 0 ? top + lastFilled : top - 1) + 1, endRow = start + add.length - 1;
+  if (typeof sheet.getMaxRows === 'function' && endRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), endRow - sheet.getMaxRows());
+  const range = sheet.getRange(start, bi + 1, add.length, 1);
+  range.setValues(add.map(id => [names[id]]));
+  const rich = range.getRichTextValues();
+  add.forEach((id, k) => { rich[k][0] = rich[k][0].copy().setLinkUrl('https://store.steampowered.com/app/' + id + '/').build(); });
+  range.setRichTextValues(rich);
+  if (ii >= 0) sheet.getRange(start, ii + 1, add.length, 1).setValues(add.map(id => [id]));
+  const map = loadJson_(props, 'BUY_MAP') || {}, nowSec = Math.floor(Date.now() / 1000);
+  add.forEach(id => { map[norm_(names[id])] = [id, nowSec, names[id]]; });
+  const keys = Object.keys(map); if (keys.length > 800) keys.slice(0, keys.length - 800).forEach(x => delete map[x]);
+  saveJson_(props, 'BUY_MAP', map);
+  return note + 'Added ' + add.length + ' wishlist game' + (add.length === 1 ? '' : 's') + ' to ' + BUY_HEADER + ' (in your wishlist order, with store links and app ids).' +
+    '\n\nSkipped: ' + owned + ' already owned, ' + (listed + dupName) + ' already in the list.' +
+    (noName ? '\n\n' + noName + ' wishlist games could not be named right now. Run this again later to add them.' : '') +
+    '\n\nTip: Tools > GAMES TO BUY > Sort A to Z puts the list in alphabetical order.';
+}
+
 // Sorts only the GAMES TO BUY column, A-Z. The rest of the sheet does not move; links and notes travel with their names.
 function sortBuyColumn() {
   const r = withLock_(() => {
     const sheet = steamSheet_(SpreadsheetApp.getActiveSpreadsheet());
     if (!sheet || isBlankSheet_(sheet)) return 'There is no Steam tab to work on.';
     const i = headersOf_(sheet).indexOf(BUY_HEADER.toLowerCase());
-    if (i < 0) return 'The "' + sheet.getName() + '" tab has no ' + BUY_HEADER + ' column. Add one with Sheet setup > Add GAMES TO BUY column.';
+    if (i < 0) return 'The "' + sheet.getName() + '" tab has no ' + BUY_HEADER + ' column. Add one with Sheet setup > Add columns > Steam: GAMES TO BUY.';
     const top = topRow_(sheet);                                  // skips the header and a totals row
     const n = sheet.getLastRow() - top + 1;
     if (n < 2) return 'There is nothing to sort in ' + BUY_HEADER + '.';
@@ -3956,6 +4096,193 @@ function addRetroPoints_(names) {
     return 'Added ' + todo.join(' and ') + '. They fill in over the next updates (20 games each); Tools > Import missing achievements (notes) fills all of them now.';
   });
   if (r) alert_(r);
+}
+
+// Adds a GAME ID column to the RetroAchievements tab (after CONSOLE) and fills it by matching each title, so the mobile page can show each game's icon and screenshot.
+function addRetroGameId() {
+  const props = PropertiesService.getScriptProperties();
+  if (!props.getProperty('RA_USER') || !props.getProperty('RA_KEY')) { alert_('RetroAchievements is not set up yet. Run Setup for RetroAchievements first.'); return; }
+  let errText = '';
+  const r = withLock_(() => {
+    RUN_T0 = Date.now();
+    const sheet = retroSheet_(SpreadsheetApp.getActiveSpreadsheet());
+    if (!sheet || isBlankSheet_(sheet)) return 'The "' + cfg_().raSheetName + '" tab is missing or blank. Set it up first.';
+    let added = false, hs = headersOf_(sheet);
+    if (hs.indexOf('game id') === -1) {
+      const after = ['console', 'genre'].map(h => hs.indexOf(h)).filter(i => i >= 0)[0];
+      const nameIdx = hs.findIndex(h => NAME_HEADERS.indexOf(h) !== -1);
+      const pos = (after !== undefined ? after : nameIdx >= 0 ? nameIdx : hs.length - 1) + 1;
+      sheet.insertColumnAfter(pos);
+      sheet.getRange(1, pos + 1).setValue('GAME ID');
+      try { sheet.getRange(1, 1).copyTo(sheet.getRange(1, pos + 1), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false); } catch (e) { /* plain header */ }
+      added = true;
+    }
+    try { updateRetro_(false, false); } catch (e) { errText = String(e && e.message || e); }
+    hs = headersOf_(sheet);
+    const gi = hs.indexOf('game id'), ni = hs.findIndex(h => NAME_HEADERS.indexOf(h) !== -1), n = ni >= 0 ? trimGameRows_(sheet, ni) : 0;
+    let have = 0, blank = 0;
+    if (gi >= 0 && n > 0) sheet.getRange(topRow_(sheet), gi + 1, n, 1).getValues().forEach(v => { if (Number(v[0]) > 0) have++; else blank++; });
+    return (added ? 'Added the GAME ID column. ' : 'The GAME ID column was already there. ') + have + ' game' + (have === 1 ? '' : 's') + ' now ha' + (have === 1 ? 's' : 've') + ' an ID' +
+      (blank ? ', ' + blank + ' still blank (not found on RetroAchievements; type the ID in by hand, or fix the title and run this again).' : '.');
+  });
+  if (r) alert_(r + (errText ? '\n\nThe update stopped early: ' + errText : ''));
+}
+
+// ---------- Milestone posts (Discord) ----------
+// Options live on a MILESTONES tab: a few switches at the top and one row per milestone type (post on or off, the levels, and where you are).
+const MS_TAB = 'MILESTONES';
+const MS_METRICS = [
+  { id: 'ach', label: 'Achievements collected', src: 'steam', levels: [100, 250, 500, 1000, 2500, 5000, 10000, 25000], what: v => v + ' achievements collected', get: o => (o.steam ? o.steam.sum.c : null) },
+  { id: 'done', label: 'Games at 100%', src: 'steam', levels: [1, 5, 10, 25, 50, 100, 250, 500], what: v => v + (v === 1 ? ' game' : ' games') + ' at 100%', get: o => (o.steam ? o.steam.sum.done : null) },
+  { id: 'hours', label: 'Hours played', src: 'steam', levels: [100, 500, 1000, 2500, 5000, 10000], what: v => v + ' hours played', get: o => (o.steam ? o.steam.sum.hours : null) },
+  { id: 'mast', label: 'Retro games mastered', src: 'ra', levels: [1, 5, 10, 25, 50, 100], what: v => v + (v === 1 ? ' RetroAchievements game' : ' RetroAchievements games') + ' mastered', get: o => (o.retro ? o.retro.sum.mastered : null) },
+  { id: 'pts', label: 'Retro points', src: 'ra', levels: [1000, 5000, 10000, 25000, 50000, 100000], what: v => v + ' RetroAchievements points', get: o => (o.retro && o.retro.sum.pts !== null ? o.retro.sum.pts : null) }
+];
+const MS_SETTINGS = [
+  ['on', 'Post milestones to Discord', true, 'The master switch.'],
+  ['catchup', 'Post milestones you already passed (first run only)', false, 'Off: the first update only notes where you are, so Discord is not flooded.'],
+  ['role', 'Mention the Discord role', false, 'Uses the role id from Discord look > Role mention.'],
+  ['next', 'Show the next target', true, 'Adds the next level to each post.'],
+  ['color', 'Post colour', '#f1c40f', 'A colour like #f1c40f.'],
+  ['title', 'Post title', '🎉 Milestone: {metric}', 'You can use {metric} and {value}.']
+];
+const msTrue_ = v => v === true || /^(true|yes|on|1)$/i.test(String(v).trim());
+const msNum_ = n => Number(n).toLocaleString('en-US', { maximumFractionDigits: 1 });
+function msLevels_(text, def) {
+  const l = String(text).split(/[,;\s]+/).map(Number).filter(n => isFinite(n) && n > 0);
+  return l.length ? Array.from(new Set(l)).sort((a, b) => a - b) : def.slice();
+}
+
+// Reads the tab. Returns null when there is no MILESTONES tab (milestone posts are then off).
+function msSettings_(ss) {
+  const sh = ss.getSheetByName(MS_TAB);
+  if (!sh) return null;
+  const last = Math.max(sh.getLastRow(), 1), vals = sh.getRange(1, 1, last, 6).getValues();
+  const cfg = { sheet: sh, metrics: {} };
+  MS_SETTINGS.forEach(d => { cfg[d[0]] = d[2]; });
+  let headerRow = -1;
+  vals.forEach((r, i) => {
+    const label = String(r[0]).trim();
+    const d = MS_SETTINGS.find(x => x[1] === label);
+    if (d && headerRow < 0) {
+      if (typeof d[2] === 'boolean') cfg[d[0]] = msTrue_(r[1]);
+      else if (String(r[1]).trim() !== '') cfg[d[0]] = String(r[1]).trim();
+    }
+    if (label === 'Milestone' && headerRow < 0) headerRow = i;
+  });
+  MS_METRICS.forEach(m => { cfg.metrics[m.id] = { on: true, levels: m.levels.slice(), row: -1 }; });
+  if (headerRow >= 0) {
+    for (let i = headerRow + 1; i < vals.length; i++) {
+      const m = MS_METRICS.find(x => x.label === String(vals[i][0]).trim());
+      if (m) cfg.metrics[m.id] = { on: msTrue_(vals[i][1]), levels: msLevels_(vals[i][2], m.levels), row: i + 1 };
+    }
+  }
+  return cfg;
+}
+
+// Writes the tab (settings kept as given, status columns from `out`).
+function msWrite_(sh, cfg, out, state) {
+  sh.clear();
+  sh.getRange(1, 1).setValue('MILESTONES').setFontWeight('bold').setFontSize(14);
+  sh.getRange(2, 1).setValue('Discord posts when you pass a level. Change the switches and levels below; the status columns fill in on each update.');
+  sh.getRange(3, 1, 1, 3).setValues([['Setting', 'Value', 'What it does']]).setFontWeight('bold').setBackground('#e8eef7');
+  MS_SETTINGS.forEach((d, i) => {
+    sh.getRange(4 + i, 1, 1, 3).setValues([[d[1], cfg[d[0]], d[3]]]);
+    if (typeof d[2] === 'boolean') sh.getRange(4 + i, 2).insertCheckboxes();
+  });
+  const hr = 4 + MS_SETTINGS.length + 1;
+  sh.getRange(hr, 1, 1, 6).setValues([['Milestone', 'Post?', 'Levels (comma separated)', 'Now', 'Last reached', 'Next level']]).setFontWeight('bold').setBackground('#e8eef7');
+  MS_METRICS.forEach((m, i) => {
+    const mc = cfg.metrics[m.id], v = m.get(out || {}), levels = mc.levels, reached = v === null ? [] : levels.filter(l => v >= l);
+    const last = state && state[m.id] !== undefined ? state[m.id] : (reached.length ? reached[reached.length - 1] : 0);
+    const next = v === null ? '' : levels.filter(l => v < l)[0];
+    sh.getRange(hr + 1 + i, 1, 1, 6).setValues([[m.label, mc.on, levels.join(', '), v === null ? 'n/a' : v, last || '', next === undefined ? 'all reached' : next]]);
+    sh.getRange(hr + 1 + i, 2).insertCheckboxes();
+  });
+  try { sh.setColumnWidth(1, 330); sh.setColumnWidth(2, 120); sh.setColumnWidth(3, 330); } catch (e) { /* widths are cosmetic */ }
+}
+
+// Only the Now / Last reached / Next level cells are rewritten on an update, so nothing you typed is touched.
+function msStatus_(cfg, out, state) {
+  MS_METRICS.forEach(m => {
+    const mc = cfg.metrics[m.id];
+    if (!mc || mc.row < 1) return;
+    const v = m.get(out), next = v === null ? '' : mc.levels.filter(l => v < l)[0], last = state && state[m.id] ? state[m.id] : '';
+    cfg.sheet.getRange(mc.row, 4, 1, 3).setValues([[v === null ? 'n/a' : v, last, next === undefined ? 'all reached' : next]]);
+  });
+}
+
+function buildMilestones() {
+  const r = withLock_(() => {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const had = ss.getSheetByName(MS_TAB);
+    const cfg = msSettings_(ss) || (() => { const d = { metrics: {} }; MS_SETTINGS.forEach(x => { d[x[0]] = x[2]; }); MS_METRICS.forEach(m => { d.metrics[m.id] = { on: true, levels: m.levels.slice() }; }); return d; })();
+    const sh = had || ss.insertSheet(MS_TAB);
+    msWrite_(sh, cfg, mobileBuild_(ss), loadJson_(PropertiesService.getScriptProperties(), 'MS_STATE'));
+    return (had ? 'Refreshed the ' : 'Added the ') + MS_TAB + ' tab. ' + 'Turn posts on or off and change the levels there. The first update only notes where you are; later updates post when you pass a level.';
+  });
+  if (r) alert_(r);
+}
+function openMilestones() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), sh = ss.getSheetByName(MS_TAB);
+  if (!sh) { buildMilestones(); return; }
+  ss.setActiveSheet(sh);
+}
+
+function msEmbed_(m, level, now, next, cfg, also, test) {
+  const c = cfg_();
+  const fields = [{ name: 'Now', value: msNum_(now), inline: true }];
+  if (cfg.next) fields.push({ name: 'Next level', value: next === undefined ? 'All levels reached' : msNum_(next), inline: true });
+  if (also && also.length) fields.push({ name: 'Also passed', value: also.map(msNum_).join(', ') });
+  const col = /^#[0-9a-f]{6}$/i.test(cfg.color) ? parseInt(cfg.color.slice(1), 16) : DC_COLORS.completion;
+  const embed = {
+    title: (test ? '🧪 TEST — ' : '') + dcFill_(cfg.title, { metric: m.label, value: msNum_(level) }),
+    description: (test ? 'This is a test message. ' : '') + 'You have reached **' + m.what(msNum_(level)) + '**!',
+    color: col,
+    fields: fields
+  };
+  return dcStyle_(embed, c, m.src === 'ra', '', 'Now ' + msNum_(now) + (cfg.next && next !== undefined ? ' · next ' + msNum_(next) : ''));
+}
+
+// Called after each update. Remembers the highest level reached for each type and posts the ones passed since.
+function postMilestones_(out) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), cfg = msSettings_(ss);
+  if (!cfg) return 0;
+  const props = PropertiesService.getScriptProperties();
+  const state = loadJson_(props, 'MS_STATE') || {}, first = Object.keys(state).length === 0;
+  const canPost = !!props.getProperty('DISCORD_WEBHOOK');
+  const posts = [];
+  MS_METRICS.forEach(m => {
+    const v = m.get(out);
+    if (v === null) return;
+    const mc = cfg.metrics[m.id], reached = mc.levels.filter(l => v >= l), top = reached.length ? reached[reached.length - 1] : 0, seen = state[m.id];
+    const wanted = cfg.on && mc.on;
+    if (seen === undefined) {
+      state[m.id] = top;
+      if (first && cfg.catchup && wanted && canPost && top > 0) posts.push({ m: m, level: top, v: v, also: reached.slice(0, -1), levels: mc.levels });
+    } else if (top > seen) {
+      if (wanted && !canPost) return;                                   // no webhook yet: keep it for later
+      state[m.id] = top;
+      if (wanted) posts.push({ m: m, level: top, v: v, also: reached.filter(l => l > seen).slice(0, -1), levels: mc.levels });
+    }
+  });
+  saveJson_(props, 'MS_STATE', state);
+  posts.forEach(p => {
+    const next = p.levels.filter(l => p.v < l)[0];
+    dcSend_(msEmbed_(p.m, p.level, p.v, next, cfg, p.also, false), p.m.src, cfg.role ? 'milestone' : '');
+  });
+  try { msStatus_(cfg, out, state); } catch (e) { /* the status columns are cosmetic */ }
+  return posts.length;
+}
+
+function sendTestMilestone() {
+  if (!PropertiesService.getScriptProperties().getProperty('DISCORD_WEBHOOK')) { alert_('Set your Discord webhook first (Settings > Accounts > Discord webhook).'); return; }
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), out = mobileBuild_(ss);
+  const cfg = msSettings_(ss) || (() => { const d = {}; MS_SETTINGS.forEach(x => { d[x[0]] = x[2]; }); return d; })();
+  const m = MS_METRICS.find(x => x.get(out) !== null) || MS_METRICS[0], v = m.get(out) || 0;
+  const reached = m.levels.filter(l => v >= l), level = reached.length ? reached[reached.length - 1] : m.levels[0];
+  dcSend_(msEmbed_(m, level, v, m.levels.filter(l => v < l)[0], cfg, [], true), m.src, cfg.role ? 'milestone' : '');
+  alert_('Sent a test milestone post to Discord.');
 }
 
 // ---------- Discord look: menu handlers ----------
@@ -4034,3 +4361,876 @@ function resetDcLook() {
   setCfg_(patch); buildMenu_();
   alert_('The Discord look is back to the defaults.');
 }
+
+// ---------- Mobile page ----------
+// A phone-friendly page that reads the STEAM, RETRO and GAMES TO BUY data from this sheet and can run an update.
+// Set up once: Tools > Mobile page (link and setup). The page is a Google Apps Script web app that must be deployed "Execute as: Me,
+// Who has access: Only myself". The functions below that the page calls (mobileData, mobileGame, mobileUpdate) refuse anyone else.
+
+// The spreadsheet: the one this script is attached to; a web app can't always see it, so the id saved by the setup item is the backup.
+function mobileSS_() {
+  let ss = null;
+  try { ss = SpreadsheetApp.getActiveSpreadsheet(); } catch (e) { /* not in a sheet session */ }
+  if (ss) return ss;
+  const id = PropertiesService.getScriptProperties().getProperty('SHEET_ID');
+  if (!id) throw new Error('Open the sheet and run Tools > Mobile page (link and setup) once.');
+  return SpreadsheetApp.openById(id);
+}
+
+// True only when Google confirms the visitor is the script's owner (an unknown identity counts as not the owner).
+function mobileIsOwner_() {
+  try { const a = Session.getActiveUser().getEmail(), o = Session.getEffectiveUser().getEmail(); return !!a && !!o && a === o; } catch (e) { return false; }
+}
+
+// Only you: a visitor who is not the script's owner is refused.
+function mobileGuard_() {
+  let active = '', owner = '';
+  try { active = Session.getActiveUser().getEmail(); owner = Session.getEffectiveUser().getEmail(); } catch (e) { /* unknown */ }
+  if (active && owner && active !== owner) throw new Error('This page is private.');
+}
+
+function doGet() {
+  mobileGuard_();
+  return HtmlService.createHtmlOutput(MOBILE_HTML)
+    .setTitle('Achievement Tracker')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+    .addMetaTag('mobile-web-app-capable', 'yes')
+    .addMetaTag('apple-mobile-web-app-capable', 'yes');
+}
+
+// Colour choices from the Options tab, kept in a script property and checked on the way in and out.
+const MOBILE_THEMES = ['dark', 'black', 'light', 'midnight', 'forest', 'mocha', 'paper', 'custom', 'auto'];
+const MOBILE_CUSTOM = { bg: '#1b1530', card: '#261e42', text: '#efeaff' };
+const isHex_ = v => /^#[0-9a-fA-F]{6}$/.test(String(v || ''));
+function mobileCleanPrefs_(p) {
+  p = p || {};
+  return {
+    theme: MOBILE_THEMES.indexOf(p.theme) !== -1 ? p.theme : 'dark',
+    accent: isHex_(p.accent) ? String(p.accent).toLowerCase() : '#4cc9b0',
+    custom: ['bg', 'card', 'text'].reduce((o, k) => { o[k] = p.custom && isHex_(p.custom[k]) ? String(p.custom[k]).toLowerCase() : MOBILE_CUSTOM[k]; return o; }, {})
+  };
+}
+function mobilePrefs_() { return mobileCleanPrefs_(loadJson_(PropertiesService.getScriptProperties(), 'MOBILE_PREFS')); }
+function mobileSavePrefs(p) {
+  mobileGuard_();
+  if (!mobileIsOwner_()) throw new Error('Only the owner can change the shared defaults.');
+  p = p || {};
+  if (p.theme !== undefined && MOBILE_THEMES.indexOf(p.theme) === -1) throw new Error('Unknown theme.');
+  if (p.accent !== undefined && !/^#[0-9a-fA-F]{6}$/.test(String(p.accent))) throw new Error('Accent must look like #4cc9b0.');
+  if (p.custom !== undefined && !(p.custom && ['bg', 'card', 'text'].every(k => isHex_(p.custom[k])))) throw new Error('Custom colours must look like #1b1530.');
+  const clean = mobileCleanPrefs_(Object.assign({}, mobilePrefs_(), p));
+  saveJson_(PropertiesService.getScriptProperties(), 'MOBILE_PREFS', clean);
+  return clean;
+}
+
+// Reads one tab into plain rows. `pick` maps header names to output keys.
+function mobileRead_(sheet, wanted) {
+  const headers = headersOf_(sheet), nameIdx = headers.findIndex(h => NAME_HEADERS.indexOf(h) !== -1);
+  if (nameIdx === -1) return null;
+  const n = trimGameRows_(sheet, nameIdx), top = topRow_(sheet);
+  if (n < 1) return { headers: headers, top: top, rows: [], nameIdx: nameIdx };
+  const lastCol = sheet.getLastColumn();
+  const vals = sheet.getRange(top, 1, n, lastCol).getValues();
+  const idx = {};
+  Object.keys(wanted).forEach(k => { idx[k] = wanted[k].map(h => headers.indexOf(h)).filter(i => i >= 0)[0]; if (idx[k] === undefined) idx[k] = -1; });
+  return { headers: headers, top: top, rows: vals, idx: idx, nameIdx: nameIdx };
+}
+const mNum_ = v => (typeof v === 'number' && isFinite(v) ? v : null);
+const mTime_ = v => (v instanceof Date ? v.getTime() : null);
+
+// What the page loads: the sheet's numbers, plus the saved progress history and recent activity.
+function mobileData() {
+  mobileGuard_();
+  const out = mobileBuild_(mobileSS_());
+  out.prefs = mobilePrefs_();
+  try { mobileRecord_(out); } catch (e) { /* the history is optional */ }
+  try { mobileBuyBanners_(out.buy); } catch (e) { /* banners are cosmetic */ }
+  out.history = mobileHistory_();
+  out.recent = mobileRecent_(out);
+  return out;
+}
+
+function mobileBuild_(ss) {
+  const c = cfg_();
+  const out = { updated: null, steam: null, retro: null, buy: [] };
+
+  const st = steamSheet_(ss);
+  const sr = st && !isBlankSheet_(st) ? mobileRead_(st, { c: ['collected achies'], t: ['total achies'], h: ['hours played'], g: ['genre'], a: ['appid'], l: ['last played'], u: ['last updated'], s: PLAY_STATUS_HEADERS }) : null;
+  if (sr) {
+    const base = loadJson_(PropertiesService.getScriptProperties(), 'WEEK_BASE');
+    const games = [], status = {}, sum = { c: 0, t: 0, done: 0, games: 0, hours: 0, week: base ? 0 : null };
+    sr.rows.forEach((r, i) => {
+      const name = String(r[sr.nameIdx]).trim(); if (!name) return;
+      const cc = sr.idx.c >= 0 ? mNum_(r[sr.idx.c]) : null, tt = sr.idx.t >= 0 ? mNum_(r[sr.idx.t]) : null;
+      const hh = sr.idx.h >= 0 ? mNum_(r[sr.idx.h]) : null, aid = sr.idx.a >= 0 ? String(r[sr.idx.a]).trim() : '';
+      const s = sr.idx.s >= 0 ? String(r[sr.idx.s]).trim().toUpperCase() : '';
+      games.push({ r: sr.top + i, n: name, s: PLAY_STATES.indexOf(s) !== -1 ? s : '', g: sr.idx.g >= 0 ? String(r[sr.idx.g]) : '', c: cc || 0, t: tt || 0, h: hh, a: aid, l: sr.idx.l >= 0 ? mTime_(r[sr.idx.l]) : null });
+      const up = sr.idx.u >= 0 ? mTime_(r[sr.idx.u]) : null;
+      if (up && (!out.updated || up > out.updated)) out.updated = up;
+      sum.games++; sum.c += cc || 0; sum.t += tt || 0; sum.hours += hh || 0;
+      if (tt > 0 && cc >= tt) sum.done++;
+      if (PLAY_STATES.indexOf(s) !== -1) status[s] = (status[s] || 0) + 1;
+      if (base && aid && base[aid] && cc !== null && typeof base[aid][1] === 'number') sum.week += Math.max(0, cc - base[aid][1]);
+    });
+    sum.hours = Math.round(sum.hours * 10) / 10;
+    out.steam = { name: st.getName(), games: games, status: status, sum: sum };
+  }
+
+  const ra = c.raOn || retroSheet_(ss) ? retroSheet_(ss) : null;
+  const rr = ra && !isBlankSheet_(ra) ? mobileRead_(ra, { i: ['game id'], c: ['collected achies'], t: ['total achies'], hc: ['collected hc achies', 'hardcore achies'], k: ['console'], p: ['collected points'], pt: ['total points'], ph: ['collected hc points'] }) : null;
+  if (rr) {
+    const games = [], sum = { c: 0, t: 0, hc: 0, mastered: 0, pts: rr.idx.p >= 0 ? 0 : null, ph: rr.idx.ph >= 0 ? 0 : null };
+    rr.rows.forEach((r, i) => {
+      const name = String(r[rr.nameIdx]).trim(); if (!name) return;
+      const g = { r: rr.top + i, n: name, k: rr.idx.k >= 0 ? String(r[rr.idx.k]) : '', c: mNum_(r[rr.idx.c]) || 0, t: mNum_(r[rr.idx.t]) || 0,
+        hc: rr.idx.hc >= 0 ? mNum_(r[rr.idx.hc]) || 0 : 0, i: rr.idx.i >= 0 && Number(r[rr.idx.i]) > 0 ? Number(r[rr.idx.i]) : 0, p: rr.idx.p >= 0 ? mNum_(r[rr.idx.p]) : null, pt: rr.idx.pt >= 0 ? mNum_(r[rr.idx.pt]) : null, ph: rr.idx.ph >= 0 ? mNum_(r[rr.idx.ph]) : null };
+      games.push(g);
+      sum.c += g.c; sum.t += g.t; sum.hc += g.hc;
+      if (g.t > 0 && g.hc >= g.t) sum.mastered++;
+      if (sum.pts !== null) sum.pts += g.p || 0;
+      if (sum.ph !== null) sum.ph += g.ph || 0;
+    });
+    out.retro = { name: ra.getName(), games: games, sum: sum };
+  }
+
+  if (st && !isBlankSheet_(st)) {
+    const headers = headersOf_(st), bi = headers.indexOf(BUY_HEADER.toLowerCase()), ii = headers.indexOf(BUY_ID_HEADER.toLowerCase());
+    if (bi >= 0) {
+      const top = topRow_(st), n = st.getLastRow() - top + 1;
+      if (n > 0) {
+        const rich = st.getRange(top, bi + 1, n, 1).getRichTextValues(), notes = st.getRange(top, bi + 1, n, 1).getNotes();
+        const ids = ii >= 0 ? st.getRange(top, ii + 1, n, 1).getValues() : null;
+        rich.forEach((r, k) => {
+          const text = String(r[0].getText()).trim(); if (!text) return;
+          const url = String(r[0].getLinkUrl() || '');
+          out.buy.push({ n: text, url: /^https:\/\//.test(url) ? url : '', appid: ids ? String(ids[k][0]).trim() : '', note: String(notes[k][0]).replace(STATUS_NOTE, '').slice(0, 140) });
+        });
+        out.buy.sort((a, b) => a.n.toLowerCase() < b.n.toLowerCase() ? -1 : 1);
+      }
+    }
+  }
+  return out;
+}
+
+// ---------- Mobile page: history, recent activity, quick wins and the few things it can change ----------
+// One line of totals per day, kept so the page can draw progress over time. Written whenever the page loads or an update runs.
+function mobileRecord_(out) {
+  if (!out || (!out.steam && !out.retro)) return;
+  const s = out.steam ? out.steam.sum : null, r = out.retro ? out.retro.sum : null;
+  const snap = [s ? s.c : 0, s ? s.t : 0, s ? s.done : 0, s ? s.games : 0, r ? r.c : 0, r ? r.mastered : 0, r && r.pts !== null ? r.pts : 0];
+  let tz = 'UTC'; try { tz = Session.getScriptTimeZone() || 'UTC'; } catch (e) { /* use UTC */ }
+  const day = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), props = PropertiesService.getScriptProperties();
+  const h = loadJson_(props, 'MOBILE_HISTORY') || {};
+  if (JSON.stringify(h[day]) === JSON.stringify(snap)) return;
+  h[day] = snap;
+  Object.keys(h).sort().slice(0, Math.max(0, Object.keys(h).length - 800)).forEach(k => delete h[k]);
+  saveJson_(props, 'MOBILE_HISTORY', h);
+}
+function mobileHistory_() {
+  const h = loadJson_(PropertiesService.getScriptProperties(), 'MOBILE_HISTORY') || {};
+  return Object.keys(h).sort().slice(-400).map(k => [k].concat(h[k]));
+}
+
+// Games with the newest unlocks, from what the updates already remember.
+function mobileRecent_(out) {
+  const lu = loadJson_(PropertiesService.getScriptProperties(), 'LAST_UNLOCK') || {}, list = [];
+  if (out.steam) out.steam.games.forEach(g => { const t = g.a ? Number(lu[g.a]) : 0; if (t > 0) list.push({ k: 'steam:' + g.r, n: g.n, t: t * 1000 }); });
+  if (out.retro) out.retro.games.forEach(g => { const t = g.i ? Number(lu['ra' + g.i]) : 0; if (t > 0) list.push({ k: 'retro:' + g.r, n: g.n, t: t * 1000 }); });
+  return list.sort((a, b) => b.t - a.t).slice(0, 12);
+}
+
+// The easiest achievements across every game, read from the missing-achievements notes (percent of players who have each).
+function mobileQuick() {
+  mobileGuard_();
+  const ss = mobileSS_(), out = [];
+  [['steam', steamSheet_(ss)], ['retro', retroSheet_(ss)]].forEach(pair => {
+    const key = pair[0], sheet = pair[1];
+    if (!sheet || isBlankSheet_(sheet)) return;
+    const headers = headersOf_(sheet), ni = headers.findIndex(h => NAME_HEADERS.indexOf(h) !== -1), ci = headers.indexOf('collected achies');
+    if (ni < 0 || ci < 0) return;
+    const n = trimGameRows_(sheet, ni), top = topRow_(sheet);
+    if (n < 1) return;
+    const names = sheet.getRange(top, ni + 1, n, 1).getValues(), notes = sheet.getRange(top, ci + 1, n, 1).getNotes();
+    for (let k = 0; k < n; k++) {
+      const parsed = mobileParseNote_(notes[k][0]);
+      parsed.items.filter(a => a.p).slice(0, 3).forEach(a => out.push({ k: key + ':' + (top + k), g: String(names[k][0]).trim(), n: a.n, d: a.d, p: parseFloat(a.p) }));
+    }
+  });
+  return out.sort((a, b) => b.p - a.p).slice(0, 40);
+}
+
+// Changes made from the phone. Each is checked closely: a known row, a known status, a short plain-text name.
+function mobileSheetRow_(tabKey, row) {
+  const ss = mobileSS_(), sheet = tabKey === 'retro' ? retroSheet_(ss) : steamSheet_(ss);
+  row = Math.floor(Number(row));
+  if (!sheet || !(row >= 2 && row <= sheet.getLastRow())) throw new Error('That game is no longer on the sheet. Reload the page.');
+  return { sheet: sheet, row: row };
+}
+function mobileSetStatus(tabKey, row, status) {
+  mobileGuard_();
+  status = String(status || '').toUpperCase();
+  if (tabKey !== 'steam' || (status !== '' && PLAY_STATES.indexOf(status) === -1)) throw new Error('That status is not allowed.');
+  return withLock_(() => {
+    const r = mobileSheetRow_(tabKey, row), headers = headersOf_(r.sheet);
+    const ci = PLAY_STATUS_HEADERS.map(h => headers.indexOf(h)).filter(i => i >= 0)[0];
+    if (ci === undefined) throw new Error('There is no BACKLOG STATUS column. Add it from the sheet menu first.');
+    r.sheet.getRange(r.row, ci + 1).setValue(status);
+    return status;
+  });
+}
+function mobileAddBuy(name) {
+  mobileGuard_();
+  const clean = String(name || '').replace(/[\u0000-\u001f]/g, ' ').replace(/^[=+\-@\s]+/, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (!clean) throw new Error('Type a game name.');
+  return withLock_(() => {
+    const sheet = steamSheet_(mobileSS_());
+    if (!sheet || isBlankSheet_(sheet)) throw new Error('There is no Steam tab.');
+    const headers = headersOf_(sheet), bi = headers.indexOf(BUY_HEADER.toLowerCase());
+    if (bi < 0) throw new Error('There is no GAMES TO BUY column. Add it from the sheet menu first.');
+    const top = topRow_(sheet), last = Math.max(sheet.getLastRow(), top), n = last - top + 1;
+    const col = sheet.getRange(top, bi + 1, n, 1).getValues().map(v => String(v[0]).trim());
+    if (col.some(v => norm_(v) && norm_(v) === norm_(clean))) throw new Error('That game is already on the list.');
+    let at = col.indexOf('');
+    at = at >= 0 ? top + at : last + 1;
+    if (typeof sheet.getMaxRows === 'function' && at > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), at - sheet.getMaxRows());
+    sheet.getRange(at, bi + 1).setValue(clean);
+    let linked = false;
+    try { linkGamesToBuy_(); linked = true; } catch (e) { /* linking needs the sheet menu context; the menu item does it later */ }
+    return { name: clean, linked: linked };
+  });
+}
+function mobileSetNote(tabKey, row, text) {
+  mobileGuard_();
+  if (tabKey !== 'steam' && tabKey !== 'retro') throw new Error('Unknown tab.');
+  text = String(text || '').replace(/[\u0000-\u0008\u000b-\u001f]/g, ' ').trim().slice(0, 500);
+  return withLock_(() => {
+    const r = mobileSheetRow_(tabKey, row), headers = headersOf_(r.sheet), ni = headers.findIndex(h => NAME_HEADERS.indexOf(h) !== -1);
+    const key = tabKey + ':' + norm_(String(r.sheet.getRange(r.row, ni + 1).getValue()));
+    const props = PropertiesService.getScriptProperties(), notes = loadJson_(props, 'MOBILE_NOTES') || {};
+    if (text) notes[key] = text; else delete notes[key];
+    saveJson_(props, 'MOBILE_NOTES', notes);
+    return text;
+  });
+}
+
+// Banner for each GAMES TO BUY entry that has an app id (typed, or taken from its store link). Addresses come from the store in one parallel
+// request for the ones not remembered yet (up to 10 per load, kept for six hours; a failed one is retried after an hour); the rest use the usual address.
+function mobileBuyBanners_(buy) {
+  const ids = {};
+  buy.forEach(b => {
+    const m = /^\d+$/.test(String(b.appid)) ? [0, String(b.appid)] : /\/app\/(\d+)/.exec(b.url || '');
+    if (m) { b.aid = m[1]; ids[m[1]] = true; }
+  });
+  const list = Object.keys(ids);
+  if (!list.length) return;
+  const cache = CacheService.getScriptCache(), have = cache.getAll(list.map(i => 'BANNER_' + i)) || {};
+  const missing = list.filter(i => !have['BANNER_' + i]).slice(0, 10), found = {};
+  if (missing.length) {
+    const res = UrlFetchApp.fetchAll(missing.map(i => ({ url: 'https://store.steampowered.com/api/appdetails?appids=' + i + '&filters=basic', muteHttpExceptions: true })));
+    const put = {};
+    missing.forEach((i, n) => {
+      try {
+        const j = JSON.parse(res[n].getContentText()), h = j && j[i] && j[i].data && j[i].data.header_image;
+        if (h && /^https:\/\/[a-z0-9.-]+\.steamstatic\.com\/[A-Za-z0-9\/._?=&%-]+$/.test(h)) { found[i] = h; put['BANNER_' + i] = h; }
+      } catch (e) { /* use the usual address */ }
+    });
+    if (Object.keys(put).length) cache.putAll(put, 21600);
+    const miss = {};
+    missing.forEach(i => { if (!found[i]) miss['BANNER_' + i] = 'https://cdn.akamai.steamstatic.com/steam/apps/' + i + '/header.jpg'; });
+    if (Object.keys(miss).length) cache.putAll(miss, 3600);     // a failed lookup is not repeated on every load
+  }
+  buy.forEach(b => {
+    if (!b.aid) return;
+    b.banner = have['BANNER_' + b.aid] || found[b.aid] || 'https://cdn.akamai.steamstatic.com/steam/apps/' + b.aid + '/header.jpg';
+    delete b.aid;
+  });
+}
+
+// The banner image address comes from the store itself (newer games use a different path than the old one); falls back to the old pattern.
+function mobileBanner_(aid) {
+  const legacy = 'https://cdn.akamai.steamstatic.com/steam/apps/' + aid + '/header.jpg', key = 'BANNER_' + aid;
+  try {
+    const cache = CacheService.getScriptCache(), hit = cache.get(key);
+    if (hit) return hit;
+    const res = UrlFetchApp.fetch('https://store.steampowered.com/api/appdetails?appids=' + aid + '&filters=basic', { muteHttpExceptions: true });
+    const j = JSON.parse(res.getContentText()), h = j && j[aid] && j[aid].data && j[aid].data.header_image;
+    const url = h && /^https:\/\/[a-z0-9.-]+\.steamstatic\.com\/[A-Za-z0-9\/._?=&%-]+$/.test(h) ? h : legacy;
+    cache.put(key, url, 21600);
+    return url;
+  } catch (e) { return legacy; }
+}
+
+// RetroAchievements pictures for one game: the small icon and a screenshot used as the banner. Kept for six hours.
+function mobileRetroImages_(id) {
+  const none = { icon: '', banner: '' }, key = 'RAIMG_' + id;
+  try {
+    const cache = CacheService.getScriptCache(), hit = cache.get(key);
+    if (hit) return JSON.parse(hit);
+    const res = UrlFetchApp.fetch(raUrl_('API_GetGame.php', { i: id }), { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) { cache.put(key, JSON.stringify(none), 3600); return none; }
+    const j = JSON.parse(res.getContentText());
+    const out = { icon: raImage_(j.ImageIcon), banner: raImage_(j.ImageIngame || j.ImageTitle || j.ImageBoxArt) };
+    cache.put(key, JSON.stringify(out), 21600);
+    return out;
+  } catch (e) { return none; }
+}
+
+// One game's detail: the achievements still missing, read from the note on its COLLECTED ACHIES cell.
+function mobileGame(tabKey, row) {
+  mobileGuard_();
+  const ss = mobileSS_(), sheet = tabKey === 'retro' ? retroSheet_(ss) : steamSheet_(ss);
+  row = Math.floor(Number(row));
+  if (!sheet || !(row >= 2 && row <= sheet.getLastRow())) throw new Error('That game is no longer on the sheet. Reload the page.');
+  const headers = headersOf_(sheet), at = h => headers.indexOf(h);
+  const ni = headers.findIndex(h => NAME_HEADERS.indexOf(h) !== -1), ci = at('collected achies'), ti = at('total achies');
+  const vals = sheet.getRange(row, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const status = PLAY_STATUS_HEADERS.map(h => at(h)).filter(i => i >= 0)[0];
+  const aid = tabKey === 'retro' ? '' : String(at('appid') >= 0 ? vals[at('appid')] : '').trim();
+  const hours = at('hours played') >= 0 && typeof vals[at('hours played')] === 'number' ? vals[at('hours played')] : null;
+  const genre = at('genre') >= 0 ? String(vals[at('genre')]).trim() : '';
+  const sub = [genre, tabKey === 'retro' ? (at('console') >= 0 ? String(vals[at('console')]).trim() : '') : '', hours !== null ? hours + ' hours' : ''].filter(Boolean).join(' · ');
+  let banner = '', icon = '';
+  if (tabKey === 'retro') {
+    const gid = at('game id') >= 0 ? String(vals[at('game id')]).trim() : '';
+    if (/^\d+$/.test(gid)) { const im = mobileRetroImages_(gid); banner = im.banner; icon = im.icon; }
+  } else if (aid && /^\d+$/.test(aid)) banner = mobileBanner_(aid);
+  const note = ci >= 0 ? String(sheet.getRange(row, ci + 1).getNote() || '') : '';
+  const parsed = mobileParseNote_(note);
+  return { name: String(vals[ni]).trim(), sub: sub, c: ci >= 0 && typeof vals[ci] === 'number' ? vals[ci] : 0, t: ti >= 0 && typeof vals[ti] === 'number' ? vals[ti] : 0,
+    status: status !== undefined && PLAY_STATES.indexOf(String(vals[status]).trim().toUpperCase()) !== -1 ? String(vals[status]).trim().toUpperCase() : '',
+    items: parsed.items, more: parsed.more, easy: parsed.easy, store: aid && /^\d+$/.test(aid) ? 'https://store.steampowered.com/app/' + aid + '/' : '',
+    banner: banner, icon: icon, key: tabKey + ':' + norm_(String(vals[ni])), mine: (loadJson_(PropertiesService.getScriptProperties(), 'MOBILE_NOTES') || {})[tabKey + ':' + norm_(String(vals[ni]))] || '' };
+}
+
+// Turns the missing-achievements note back into a list: "• Name — description (12%)".
+function mobileParseNote_(note) {
+  const res = { items: [], more: '', easy: false };
+  if (String(note).indexOf(MISS_NOTE) !== 0) return res;
+  const lines = String(note).split('\n');
+  res.easy = /easiest first/.test(lines[0]);
+  lines.slice(1).forEach(l => {
+    if (l.indexOf('• ') === 0) {
+      let t = l.slice(2), p = '';
+      const m = /\s\((\d+(?:\.\d+)?)%\)$/.exec(t);
+      if (m) { p = m[1] + '%'; t = t.slice(0, m.index); }
+      const cut = t.indexOf(' — ');
+      res.items.push({ n: cut >= 0 ? t.slice(0, cut) : t, d: cut >= 0 ? t.slice(cut + 3) : '', p: p });
+    } else if (l.indexOf('…and ') === 0) res.more = l.slice(1);
+  });
+  return res;
+}
+
+// The Update now button on the page: the same update as the menu.
+function mobileUpdate() {
+  mobileGuard_();
+  RUN_MANUAL_ = true;
+  try { run_(false, false); } finally { RUN_MANUAL_ = false; }
+  return true;
+}
+
+// Menu: saves the sheet id for the web app and explains how to get the phone link.
+function mobilePageSetup() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  PropertiesService.getScriptProperties().setProperty('SHEET_ID', ss.getId());
+  let url = '';
+  try { url = ScriptApp.getService().getUrl() || ''; } catch (e) { /* not deployed yet */ }
+  alert_(url
+    ? 'Your mobile page link:\n\n' + url + '\n\nOpen it on your phone (signed in to the same Google account), then use the browser menu > Add to Home screen. If you changed the script, deploy a new version: Deploy > Manage deployments > edit > New version.'
+    : 'The sheet is saved for the mobile page. To get your link:\n\n1. In the script editor click Deploy > New deployment.\n2. Pick the type "Web app".\n3. Execute as: Me. Who has access: Only myself.\n4. Click Deploy and allow access when asked.\n5. Copy the Web app URL, open it on your phone and use the browser menu > Add to Home screen.\n\nRun this item again after deploying to see the link here.');
+}
+
+const MOBILE_HTML = String.raw`
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1419">
+<title>Achievement Tracker</title>
+<style>
+:root{--bg:#0f1419;--card:#18202a;--line:#243040;--text:#e6edf3;--muted:#9aa7b4;--acc:#4cc9b0;--on-acc:#06231d;--track:#2a3644;--chip:#33404f;--errbg:#3a1d1d;--errline:#7a3030}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body{min-height:100vh;padding-bottom:calc(72px + env(safe-area-inset-bottom))}
+button{font:inherit;color:inherit}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:560px;margin:0 auto;padding:0 20px}
+.top{display:flex;align-items:center;justify-content:space-between;padding:20px 0 12px;gap:12px}
+h1{margin:0;font-size:20px}
+.sub{color:var(--muted);font-size:12px;margin-top:2px}
+.btn{min-height:44px;padding:0 16px;border-radius:22px;border:0;background:var(--acc);color:var(--on-acc);font-weight:600;cursor:pointer}
+.btn[disabled]{opacity:.6}
+.btn.ghost{background:transparent;border:1px solid var(--chip);color:var(--text)}
+.card{background:var(--card);border-radius:16px;padding:16px;margin-bottom:14px;box-shadow:0 0 0 1px var(--line)}
+.row{display:flex;align-items:center;gap:12px}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.stat{background:var(--card);border-radius:14px;padding:14px;box-shadow:0 0 0 1px var(--line)}
+.stat .l{color:var(--muted);font-size:12px}
+.stat .v{font-size:20px;font-weight:700;margin-top:4px}
+.stat .s{color:var(--muted);font-size:12px;margin-top:2px}
+.ring{width:92px;height:92px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none}
+.ring div{width:74px;height:74px;border-radius:50%;background:var(--card);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700}
+.bar{height:6px;background:var(--track);border-radius:3px;overflow:hidden;position:relative;flex:1}
+.bar i{position:absolute;left:0;top:0;height:100%;display:block}
+.seg{display:flex;height:12px;border-radius:6px;overflow:hidden;gap:2px}
+.legend{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px;margin-top:12px;font-size:13px}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:8px}
+.search{display:flex;align-items:center;background:var(--card);border-radius:12px;padding:0 14px;min-height:46px;margin-bottom:10px}
+.search input{flex:1;background:transparent;border:0;outline:0;color:var(--text);font:inherit;font-size:16px;min-height:44px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.chip{min-height:40px;padding:0 14px;border-radius:20px;border:1px solid var(--chip);background:transparent;cursor:pointer;font-size:13px}
+.chip.on{background:var(--acc);border-color:var(--acc);color:var(--on-acc);font-weight:600}
+.meta{display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:12px}
+.linkbtn{min-height:44px;background:transparent;border:0;color:var(--acc);font-weight:600;font-size:13px;cursor:pointer}
+.item{display:block;width:100%;text-align:left;background:transparent;border:0;border-top:1px solid var(--line);padding:12px 0;cursor:pointer}
+.item .t{display:flex;justify-content:space-between;align-items:center;gap:10px;font-weight:600}
+.item .b{display:flex;align-items:center;gap:12px;margin-top:8px}
+.item .n{color:var(--muted);font-size:12px;min-width:64px;text-align:right}
+.pill{padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap}
+.pill.COMPLETED{background:#4cc9b0;color:#06231d}.pill.ACTIVE{background:#7aa2ff;color:#0a1a3d}.pill.IDLE{background:#f2b84b;color:#3a2600}.pill.BACKLOG{background:#8b98a5;color:#10161c}
+.sm{color:var(--muted);font-size:12px}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--bg);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;min-height:56px;background:transparent;border:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--muted);font-size:11px;cursor:pointer}
+nav button.on{color:var(--acc);font-weight:600}
+nav svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.back{min-height:44px;background:transparent;border:0;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:4px;padding:8px 0}
+.hero{color:#fff;border-radius:14px;padding:14px;background:linear-gradient(135deg,#1f3a5f,#0f2a3d);min-height:100px;display:flex;align-items:flex-end;margin-bottom:14px}
+.ach{display:flex;gap:12px;padding:11px 0;border-top:1px solid var(--line)}
+.ach .p{color:var(--acc);font-weight:700;font-size:13px;white-space:nowrap}
+.err{background:var(--errbg);border:1px solid var(--errline);border-radius:12px;padding:12px;margin-bottom:14px}
+.empty{color:var(--muted);padding:24px 0;text-align:center}
+.sw{width:44px;height:44px;border-radius:50%;border:3px solid transparent;cursor:pointer;padding:0;flex:none}
+.sw.on{border-color:var(--text)}
+.swrow{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.optlabel{font-weight:600;margin:0 0 10px}
+.cpick{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.gicon{width:56px;height:56px;border-radius:10px;margin-right:12px;flex:none;object-fit:cover;image-rendering:pixelated;box-shadow:0 0 0 2px rgba(255,255,255,.35)}
+.card textarea,.addrow input{width:100%;box-sizing:border-box;background:transparent;border:1px solid var(--chip);color:var(--text);border-radius:10px;padding:10px;font:inherit;margin-bottom:10px}
+.addrow{display:flex;gap:8px;align-items:flex-start;margin-bottom:10px}.addrow input{margin-bottom:0}
+.badge{display:inline-block;padding:3px 10px;border-radius:10px;font-size:11px;background:var(--track);margin:0 6px 6px 0}
+.mrow{margin-bottom:14px}.mrow .l{display:flex;justify-content:space-between;gap:8px;font-size:13px;margin-bottom:4px}
+svg.chart{width:100%;height:auto;display:block}
+.bnr{display:block;border-radius:14px;margin-bottom:10px;padding:0;overflow:hidden;color:#fff;text-decoration:none;background:linear-gradient(135deg,#1f3a5f,#0f2a3d)}
+.bnr .in{min-height:84px;padding:12px 14px;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;background-size:cover;background-position:center}
+.bnr .sm{color:#d5dde5}
+.hint{color:var(--muted);font-size:12px;margin-top:8px}
+input[type=color]{width:44px;height:44px;border:0;border-radius:50%;padding:0;background:transparent;cursor:pointer}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="empty">Loading...</div></div>
+<nav id="nav" aria-label="Sections"></nav>
+<script>
+var DEF_CUSTOM = { bg: '#1b1530', card: '#261e42', text: '#efeaff' };
+var hasLocal = false, prefs = { theme: 'dark', accent: '#4cc9b0', custom: { bg: DEF_CUSTOM.bg, card: DEF_CUSTOM.card, text: DEF_CUSTOM.text } }, optNote = '';
+var sub = null, quick = null, quickErr = '', rq = '', rsortIx = 0, bq = '', buyNote = '', histRange = 90, fresh = false;
+var data = null, tab = 'over', filter = 'All', query = '', sortIx = 0, retroHc = false, detail = null, busy = false, err = '';
+var SORTS = ['Closest to 100%', 'A to Z', 'Most hours', 'Recently played'];
+var STATUS = [['COMPLETED', '#4cc9b0'], ['ACTIVE', '#7aa2ff'], ['IDLE', '#f2b84b'], ['BACKLOG', '#8b98a5']];
+var ICONS = {
+  over: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z',
+  games: 'M4 6h16M4 12h16M4 18h16',
+  retro: 'M6 9h12a3 3 0 0 1 3 3v3a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3v-3a3 3 0 0 1 3-3zM8 12v3M6.5 13.5h3',
+  buy: 'M6 6h15l-1.5 9h-12zM6 6L5 3H2M9 20a1 1 0 1 0 0 .01M18 20a1 1 0 1 0 0 .01'
+};
+var LABELS = { over: 'Overview', games: 'Games', retro: 'Retro', buy: 'To buy', opts: 'Options' };
+ICONS.opts = 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z';
+var THEMES = {
+  dark: { name: 'Dark', bg: '#0f1419', card: '#18202a', line: '#243040', text: '#e6edf3', muted: '#9aa7b4', track: '#2a3644', chip: '#33404f', errbg: '#3a1d1d', errline: '#7a3030' },
+  black: { name: 'Black', bg: '#000000', card: '#0d1014', line: '#1f262e', text: '#e6edf3', muted: '#9aa7b4', track: '#242d37', chip: '#33404f', errbg: '#3a1d1d', errline: '#7a3030' },
+  light: { name: 'Light', bg: '#f6f8fa', card: '#ffffff', line: '#d8dee4', text: '#1f2328', muted: '#57606a', track: '#d8dee4', chip: '#a9b4bf', errbg: '#ffebe9', errline: '#ff8182' }
+};
+var ACCENTS = [['Teal', '#4cc9b0'], ['Blue', '#7aa2ff'], ['Amber', '#f2b84b'], ['Purple', '#c792ea'], ['Pink', '#ff7a90'], ['Green', '#7bd88f']];
+
+function lum(hex) {
+  var c = [1, 3, 5].map(function (i) { var v = parseInt(hex.substr(i, 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+function ratio(a, b) { var x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }
+function mix(hex, to, t) {
+  var out = '#'; for (var i = 1; i <= 5; i += 2) { var a = parseInt(hex.substr(i, 2), 16), b = parseInt(to.substr(i, 2), 16); var v = Math.round(a + (b - a) * t); out += (v < 16 ? '0' : '') + v.toString(16); }
+  return out;
+}
+// Moves a colour toward black (light page) or white (dark page) until it reads clearly against the page colour.
+function readable(hex, bg, want) {
+  var to = lum(bg) > 0.5 ? '#000000' : '#ffffff', c = hex;
+  for (var i = 0; i < 20 && ratio(c, bg) < want; i++) c = mix(c, to, 0.08);
+  return c;
+}
+// Builds a full theme from three colours. Lines, muted text and chips are mixed from them so any choice stays consistent and readable.
+function makeTheme(name, bg, card, text) {
+  var tx = readable(readable(text, bg, 7), card, 7), light = lum(bg) > 0.5;
+  var worst = function (c) { return Math.min(ratio(c, bg), ratio(c, card)); };
+  if (worst(tx) < 4.5) tx = worst('#000000') >= worst('#ffffff') ? '#000000' : '#ffffff';
+  return { name: name, bg: bg, card: card, text: tx, line: mix(bg, tx, 0.16), muted: readable(mix(tx, bg, 0.35), card, 4.5), track: mix(bg, tx, 0.2), chip: mix(bg, tx, 0.32),
+    errbg: light ? '#ffebe9' : '#3a1d1d', errline: light ? '#ff8182' : '#7a3030' };
+}
+var PRESETS = [['midnight', 'Midnight', '#0b1026', '#141b3a', '#dfe6ff'], ['forest', 'Forest', '#0e1a14', '#16261d', '#e3f1e8'], ['mocha', 'Mocha', '#1c1512', '#2a201b', '#f1e6dc'], ['paper', 'Paper', '#f4ecd8', '#fbf6e8', '#2b2417']];
+PRESETS.forEach(function (x) { THEMES[x[0]] = makeTheme(x[1], x[2], x[3], x[4]); });
+function themeObj() {
+  var k = themeKey();
+  if (k === 'custom') { var c = prefs.custom || DEF_CUSTOM; return makeTheme('Custom', validHex(c.bg) ? c.bg : DEF_CUSTOM.bg, validHex(c.card) ? c.card : DEF_CUSTOM.card, validHex(c.text) ? c.text : DEF_CUSTOM.text); }
+  return THEMES[k];
+}
+function validHex(h) { return /^#[0-9a-fA-F]{6}$/.test(h || ''); }
+function themeKey() { return prefs.theme === 'auto' ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : (THEMES[prefs.theme] || prefs.theme === 'custom' ? prefs.theme : 'dark'); }
+function applyPrefs() {
+  var t = themeObj(), r = document.documentElement.style, acc = readable(validHex(prefs.accent) ? prefs.accent.toLowerCase() : '#4cc9b0', t.bg, 4.5);
+  var vars = { '--bg': t.bg, '--card': t.card, '--line': t.line, '--text': t.text, '--muted': t.muted, '--track': t.track, '--chip': t.chip, '--errbg': t.errbg, '--errline': t.errline, '--acc': acc,
+    '--on-acc': ratio('#0b1117', acc) >= ratio('#ffffff', acc) ? '#0b1117' : '#ffffff' };
+  for (var k in vars) r.setProperty(k, vars[k]);
+  var m = document.querySelector && document.querySelector('meta[name=theme-color]'); if (m) m.setAttribute('content', t.bg);
+}
+function cleanCustom(c) { c = c || {}; return { bg: validHex(c.bg) ? c.bg.toLowerCase() : DEF_CUSTOM.bg, card: validHex(c.card) ? c.card.toLowerCase() : DEF_CUSTOM.card, text: validHex(c.text) ? c.text.toLowerCase() : DEF_CUSTOM.text }; }
+function saveLocal() { try { localStorage.setItem('atPrefs', JSON.stringify(prefs)); } catch (e) { /* storage may be blocked */ } }
+function loadLocal() { try { var p = JSON.parse(localStorage.getItem('atPrefs') || 'null'); if (p) { hasLocal = true; if (THEMES[p.theme] || p.theme === 'auto' || p.theme === 'custom') prefs.theme = p.theme; if (p.custom) prefs.custom = cleanCustom(p.custom); if (validHex(p.accent)) prefs.accent = p.accent; } } catch (e) { /* none */ } }
+function setPrefs(p) {
+  for (var k in p) prefs[k] = p[k];
+  hasLocal = true;
+  applyPrefs(); saveLocal(); render();
+  google.script.run.withSuccessHandler(function () {}).withFailureHandler(function () { optNote = 'Saved on this phone only. Only the owner can change the shared defaults.'; render(); }).mobileSavePrefs(prefs);
+}
+function isApp() { return !!(window.navigator && window.navigator.standalone) || !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches); }
+function goFull() {
+  var d = document.documentElement, f = d.requestFullscreen || d.webkitRequestFullscreen;
+  if (!f) { optNote = 'Full screen is not available in this browser. Use Add to Home screen instead.'; render(); return; }
+  try { var pr = f.call(d); if (pr && pr.catch) pr.catch(function () { optNote = 'The browser did not allow full screen here. Use Add to Home screen instead.'; render(); }); } catch (e) { optNote = 'The browser did not allow full screen here. Use Add to Home screen instead.'; render(); }
+}
+
+function esc(s) { return String(s === null || s === undefined ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function num(n) { return Number(n).toLocaleString('en-US', { maximumFractionDigits: 1 }); }
+function pct(c, t) { return t > 0 ? Math.min(100, c / t * 100) : 0; }
+function el(id) { return document.getElementById(id); }
+function storeUrl(appid) { return appid ? 'https://store.steampowered.com/app/' + encodeURIComponent(appid) + '/' : ''; }
+
+function saveCache(d) { try { localStorage.setItem('atData', JSON.stringify(d)); } catch (e) { /* storage may be blocked or full */ } }
+function loadCache() { try { var d = JSON.parse(localStorage.getItem('atData') || 'null'); if (d && (d.steam || d.retro || d.buy)) { data = d; fresh = false; } } catch (e) { /* none */ } }
+function load() {
+  err = '';
+  google.script.run.withSuccessHandler(function (d) { data = d; fresh = true; saveCache(d); if (d.prefs && !hasLocal) { prefs.theme = d.prefs.theme; prefs.accent = d.prefs.accent; prefs.custom = cleanCustom(d.prefs.custom); saveLocal(); applyPrefs(); } render(); }).withFailureHandler(fail).mobileData();
+}
+function fail(e) { err = (e && e.message) ? e.message : String(e); busy = false; render(); }
+function update() {
+  if (busy) return;
+  busy = true; render();
+  google.script.run.withSuccessHandler(function () { busy = false; load(); }).withFailureHandler(fail).mobileUpdate();
+}
+function go(t) { tab = t; detail = null; sub = null; window.scrollTo(0, 0); render(); }
+
+function header(title, subtitle, withUpdate) {
+  var when = data ? (fresh ? 'Updated ' : 'Saved copy, updated ') + ago(data.updated) : '';
+  return '<div class="top"><div><h1>' + esc(title) + '</h1><div class="sub">' + esc(subtitle || when) + '</div></div>' +
+    (withUpdate ? '<button class="btn" id="upd"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Updating...' : 'Update now') + '</button>' : '') + '</div>' +
+    (err ? '<div class="err" role="alert">' + esc(err) + '</div>' : '');
+}
+function ago(ms) {
+  if (!ms) return 'never';
+  var m = Math.round((Date.now() - ms) / 60000);
+  if (m < 1) return 'just now'; if (m < 60) return m + ' min ago';
+  var h = Math.round(m / 60); if (h < 48) return h + ' h ago';
+  return Math.round(h / 24) + ' days ago';
+}
+function dayAgo(ms) {
+  if (!ms) return '';
+  var d = Math.floor((Date.now() - ms) / 86400000);
+  return d < 1 ? 'Today' : d === 1 ? 'Yesterday' : d + ' days ago';
+}
+
+function viewOver() {
+  var s = data.steam;
+  if (!s) return header('Achievement Tracker', '', true) + '<div class="empty">No Steam tab found.</div>';
+  var p = pct(s.sum.c, s.sum.t), out = header('Achievement Tracker', '', true);
+  out += '<div class="card row"><div class="ring" style="background:conic-gradient(var(--acc) ' + p + '%,var(--track) 0)"><div>' + p.toFixed(1) + '%</div></div>' +
+    '<div><div class="sm">Overall completion</div><div style="font-size:22px;font-weight:700">' + num(s.sum.c) + ' <span class="sm" style="font-size:16px">/ ' + num(s.sum.t) + '</span></div><div class="sm">achievements collected</div></div></div>';
+  out += '<div class="grid2">' + stat('Games at 100%', num(s.sum.done), 'of ' + num(s.sum.games) + ' games') + stat('Hours played', num(s.sum.hours), 'across all games') +
+    stat('This week', s.sum.week === null ? 'n/a' : '+' + num(s.sum.week), 'achievements') + stat('Backlog', num(s.status.BACKLOG || 0), 'games not started') + '</div>';
+  out += almostCard() + '<button class="card item" style="border-top:0;width:100%;text-align:left" id="quickbtn"><div class="t"><span>Quick wins</span><span class="sm">Easiest achievements across all games &#8250;</span></div></button>';
+  out += chartCard() + milesCard();
+  var seg = '', leg = '', total = 0;
+  STATUS.forEach(function (x) { total += s.status[x[0]] || 0; });
+  if (total) {
+    STATUS.forEach(function (x) {
+      var n = s.status[x[0]] || 0;
+      seg += '<div style="flex:' + n + ' 1 0;background:' + x[1] + '"></div>';
+      leg += '<div class="row" style="justify-content:space-between"><span><span class="dot" style="background:' + x[1] + '"></span>' + x[0].charAt(0) + x[0].slice(1).toLowerCase() + '</span><span class="sm">' + n + '</span></div>';
+    });
+    out += '<div class="card"><div style="font-weight:600;margin-bottom:10px">Backlog status</div><div class="seg">' + seg + '</div><div class="legend">' + leg + '</div></div>';
+  }
+  if (data.recent && data.recent.length) {
+    out += '<div class="card" style="padding-bottom:6px"><div style="font-weight:600;margin-bottom:6px">Recent unlocks</div>';
+    data.recent.slice(0, 6).forEach(function (g) { out += '<button class="item" data-open="' + esc(g.k) + '"><div class="t"><span>' + esc(g.n) + '</span><span class="sm">' + dayAgo(g.t) + '</span></div></button>'; });
+    out += '</div>';
+  }
+  var rec = s.games.filter(function (g) { return g.l; }).sort(function (a, b) { return b.l - a.l; }).slice(0, 3);
+  if (rec.length) {
+    out += '<div class="card" style="padding-bottom:6px"><div style="font-weight:600;margin-bottom:6px">Recently played</div>';
+    rec.forEach(function (g) { out += '<button class="item" data-open="steam:' + g.r + '"><div class="t"><span>' + esc(g.n) + '</span><span class="sm">' + dayAgo(g.l) + '</span></div></button>'; });
+    out += '</div>';
+  }
+  return out;
+}
+function almostCard() {
+  var list = [];
+  ((data.steam && data.steam.games) || []).forEach(function (g) { if (g.t > 0 && g.c < g.t && g.t - g.c <= 3) list.push({ k: 'steam:' + g.r, n: g.n, left: g.t - g.c, p: pct(g.c, g.t) }); });
+  ((data.retro && data.retro.games) || []).forEach(function (g) { if (g.t > 0 && g.c < g.t && g.t - g.c <= 3) list.push({ k: 'retro:' + g.r, n: g.n, left: g.t - g.c, p: pct(g.c, g.t) }); });
+  if (!list.length) return '';
+  list.sort(function (a, b) { return a.left - b.left || b.p - a.p; });
+  var out = '<div class="card" style="padding-bottom:6px"><div style="font-weight:600;margin-bottom:6px">Almost there</div>';
+  list.slice(0, 8).forEach(function (g) { out += '<button class="item" data-open="' + esc(g.k) + '"><div class="t"><span>' + esc(g.n) + '</span><span class="sm">' + g.left + ' to go</span></div></button>'; });
+  return out + '</div>';
+}
+var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function dayLabel(k) { var p = String(k).split('-'); return MONTHS[Number(p[1]) - 1] + ' ' + Number(p[2]); }
+function chartCard() {
+  var h = (data.history || []), cutoff = histRange ? Date.now() - histRange * 86400000 : 0;
+  var pts = h.map(function (e) { return { d: e[0], t: Date.parse(e[0] + 'T00:00:00Z'), v: Number(e[1]) || 0 }; }).filter(function (x) { return x.t >= cutoff; });
+  var chips = [[30, '30 days'], [90, '90 days'], [0, 'All']].map(function (r) { return '<button class="chip' + (histRange === r[0] ? ' on' : '') + '" data-range="' + r[0] + '">' + r[1] + '</button>'; }).join('');
+  var out = '<div class="card"><div style="font-weight:600;margin-bottom:10px">Progress</div><div class="chips">' + chips + '</div>';
+  if (pts.length < 2) return out + '<div class="sm">Progress is saved each time this page loads or an update runs, so this chart fills in over the next few days.</div></div>';
+  var min = pts[0].v, max = pts[0].v;
+  pts.forEach(function (x) { if (x.v < min) min = x.v; if (x.v > max) max = x.v; });
+  if (max === min) max = min + 1;
+  var t0 = pts[0].t, t1 = pts[pts.length - 1].t || t0 + 1, path = '';
+  pts.forEach(function (x, i) { path += (i ? 'L' : 'M') + (8 + (x.t - t0) / ((t1 - t0) || 1) * 284).toFixed(1) + ' ' + (104 - (x.v - min) / (max - min) * 92).toFixed(1); });
+  var last = pts[pts.length - 1], delta = last.v - pts[0].v;
+  out += '<svg class="chart" viewBox="0 0 300 112" role="img" aria-label="Achievements collected from ' + esc(dayLabel(pts[0].d)) + ' to ' + esc(dayLabel(last.d)) + ', ' + num(pts[0].v) + ' to ' + num(last.v) + '"><path d="' + path + '" fill="none" style="stroke:var(--acc)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+  return out + '<div class="row" style="justify-content:space-between;margin-top:6px"><span class="sm">' + esc(dayLabel(pts[0].d)) + '</span><b style="color:var(--acc)">' + (delta >= 0 ? '+' : '') + num(delta) + ' achievements</b><span class="sm">' + esc(dayLabel(last.d)) + '</span></div></div>';
+}
+var MILES = {
+  ach: [100, 250, 500, 1000, 2500, 5000, 10000, 25000], done: [1, 5, 10, 25, 50, 100, 250, 500],
+  hours: [100, 500, 1000, 2500, 5000, 10000], mast: [1, 5, 10, 25, 50, 100], pts: [1000, 5000, 10000, 25000, 50000, 100000]
+};
+function milesCard() {
+  var rows = [], s = data.steam, r = data.retro;
+  if (s) { rows.push(['Achievements collected', s.sum.c, MILES.ach]); rows.push(['Games at 100%', s.sum.done, MILES.done]); rows.push(['Hours played', s.sum.hours, MILES.hours]); }
+  if (r) { rows.push(['Retro games mastered', r.sum.mastered, MILES.mast]); if (r.sum.pts !== null) rows.push(['Retro points', r.sum.pts, MILES.pts]); }
+  if (!rows.length) return '';
+  var out = '<div class="card"><div style="font-weight:600;margin-bottom:12px">Milestones</div>';
+  rows.forEach(function (x) {
+    var v = x[1], th = x[2], got = th.filter(function (t) { return v >= t; }), next = th.filter(function (t) { return v < t; })[0];
+    out += '<div class="mrow"><div class="l"><span>' + esc(x[0]) + '</span><b>' + num(v) + '</b></div>' +
+      (got.length ? '<div>' + got.map(function (t) { return '<span class="badge">' + num(t) + '</span>'; }).join('') + '</div>' : '') +
+      (next ? '<div class="row"><div class="bar"><i style="width:' + Math.min(100, v / next * 100) + '%;background:var(--acc)"></i></div><span class="n sm" style="min-width:88px;text-align:right">next ' + num(next) + '</span></div>' : '<div class="sm">Every milestone reached.</div>') + '</div>';
+  });
+  return out + '</div>';
+}
+function viewQuick() {
+  var out = '<button class="back" id="back">&#8249; Back</button>' + header('Quick wins', 'The easiest achievements you are still missing', false);
+  if (quickErr) return out + '<div class="err">' + esc(quickErr) + '</div>';
+  if (!quick) return out + '<div class="empty">Loading...</div>';
+  if (!quick.length) return out + '<div class="empty">No missing-achievement notes yet. Run Tools &gt; Import missing achievements in the sheet.</div>';
+  quick.forEach(function (a) {
+    out += '<button class="item" data-open="' + esc(a.k) + '"><div class="t"><span>' + esc(a.n) + '</span><span style="color:var(--acc)">' + esc(a.p) + '%</span></div><div class="sm" style="margin-top:2px">' + esc(a.g) + (a.d ? ' - ' + esc(a.d) : '') + '</div></button>';
+  });
+  return out;
+}
+function openQuick() {
+  sub = 'quick'; quick = null; quickErr = ''; render(); window.scrollTo(0, 0);
+  google.script.run.withSuccessHandler(function (q) { quick = q; render(); }).withFailureHandler(function (e) { quickErr = (e && e.message) || String(e); render(); }).mobileQuick();
+}
+function stat(l, v, sub) { return '<div class="stat"><div class="l">' + esc(l) + '</div><div class="v">' + esc(v) + '</div><div class="s">' + esc(sub) + '</div></div>'; }
+
+function viewGames() {
+  var s = data.steam;
+  if (!s) return header('Games', '', false) + '<div class="empty">No Steam tab found.</div>';
+  var chips = ['All', 'Active', 'Idle', 'Backlog', 'Completed'].map(function (c) { return '<button class="chip' + (c === filter ? ' on' : '') + '" data-filter="' + c + '">' + c + '</button>'; }).join('');
+  return header('Games', s.games.length + ' games on the ' + s.name + ' tab', false) +
+    '<label class="search"><input id="q" type="search" placeholder="Search games" aria-label="Search games" value="' + esc(query) + '"></label>' +
+    '<div class="chips">' + chips + '</div><div class="meta"><span id="count"></span><button class="linkbtn" id="sort">Sort: ' + SORTS[sortIx] + '</button></div><div id="list"></div>';
+}
+function gamesList() {
+  var s = data.steam, q = query.toLowerCase(), f = filter.toUpperCase();
+  var list = s.games.filter(function (g) { return (filter === 'All' || g.s === f) && (!q || g.n.toLowerCase().indexOf(q) !== -1); });
+  list.sort(function (a, b) {
+    if (sortIx === 1) return a.n.toLowerCase() < b.n.toLowerCase() ? -1 : 1;
+    if (sortIx === 2) return (b.h || 0) - (a.h || 0);
+    if (sortIx === 3) return (b.l || 0) - (a.l || 0);
+    var pa = a.t > 0 && a.c >= a.t ? -1 : pct(a.c, a.t), pb = b.t > 0 && b.c >= b.t ? -1 : pct(b.c, b.t);
+    return pb - pa;
+  });
+  el('count').textContent = 'Showing ' + list.length + ' games';
+  var out = '';
+  list.forEach(function (g) {
+    out += '<button class="item" data-open="steam:' + g.r + '"><div class="t"><span>' + esc(g.n) + '</span><span class="row" style="gap:8px">' + (sortIx === 2 ? '<span class="sm">' + (g.h ? num(g.h) + ' h' : '0 h') + '</span>' : '') + (g.s ? '<span class="pill ' + esc(g.s) + '">' + esc(g.s) + '</span>' : '') + '</span></div>' +
+      '<div class="b"><div class="bar"><i style="width:' + pct(g.c, g.t) + '%;background:var(--acc)"></i></div><span class="n">' + (g.t > 0 ? g.c + ' / ' + g.t : 'no achievements') + '</span></div></button>';
+  });
+  el('list').innerHTML = out || '<div class="empty">No games match.</div>';
+}
+
+var RSORTS = ['Closest to 100%', 'A to Z', 'Most points'];
+function viewRetro() {
+  var r = data.retro;
+  if (!r) return header('Retro', '', false) + '<div class="empty">RetroAchievements is not set up on this sheet.</div>';
+  var sum = r.sum;
+  var out = header('Retro', 'RetroAchievements - ' + r.games.length + ' games on the ' + r.name + ' tab', false);
+  out += '<div class="grid3">' + stat('Collected', num(sum.c), 'of ' + num(sum.t)) + stat('Hardcore', num(sum.hc), 'of ' + num(sum.t)) +
+    (sum.pts !== null ? stat('Points', num(sum.pts), sum.ph !== null ? num(sum.ph) + ' hardcore' : 'earned') : stat('Mastered', num(sum.mastered), 'hardcore 100%')) + '</div>';
+  out += '<label class="search"><input id="rq" type="search" placeholder="Search retro games" aria-label="Search retro games" value="' + esc(rq) + '"></label>';
+  out += '<div class="chips"><button class="chip' + (!retroHc ? ' on' : '') + '" data-hc="0">All unlocks</button><button class="chip' + (retroHc ? ' on' : '') + '" data-hc="1">Hardcore only</button></div>';
+  out += '<div class="meta"><span id="rcount"></span><button class="linkbtn" id="rsort">Sort: ' + RSORTS[rsortIx] + '</button></div><div id="rlist"></div>';
+  return out;
+}
+function retroList() {
+  var q = rq.toLowerCase(), list = data.retro.games.filter(function (g) { return !q || g.n.toLowerCase().indexOf(q) !== -1 || String(g.k).toLowerCase().indexOf(q) !== -1; });
+  list.sort(function (a, b) {
+    if (rsortIx === 1) return a.n.toLowerCase() < b.n.toLowerCase() ? -1 : 1;
+    if (rsortIx === 2) return (b.p || 0) - (a.p || 0);
+    var pa = a.t > 0 && a.c >= a.t ? -1 : pct(a.c, a.t), pb = b.t > 0 && b.c >= b.t ? -1 : pct(b.c, b.t);
+    return pb - pa;
+  });
+  el('rcount').textContent = 'Showing ' + list.length + ' games';
+  var out = '';
+  list.forEach(function (g) {
+    var c = retroHc ? g.hc : g.c, t = g.t;
+    out += '<button class="item" data-open="retro:' + g.r + '"><div class="t"><span>' + esc(g.n) + '</span><span class="sm">' + esc(g.k) + '</span></div>' +
+      '<div class="b"><div class="bar"><i style="width:' + pct(g.c, t) + '%;background:#7aa2ff"></i><i style="width:' + pct(g.hc, t) + '%;background:var(--acc)"></i></div><span class="n">' + c + ' / ' + t + '</span></div>' +
+      (g.p !== null ? '<div class="sm" style="margin-top:6px">' + num(g.p) + (g.pt !== null ? ' / ' + num(g.pt) : '') + ' points' + (g.ph !== null ? ' (' + num(g.ph) + ' hardcore)' : '') + '</div>' : '') + '</button>';
+  });
+  el('rlist').innerHTML = out || '<div class="empty">No games match.</div>';
+}
+
+function viewBuy() {
+  var b = data.buy;
+  var out = header('Games to buy', b.length + ' games - A to Z', false);
+  out += '<div class="addrow"><input id="addname" type="text" maxlength="80" placeholder="Add a game" aria-label="Game to add"><button class="btn" id="addbuy">Add</button></div>' +
+    (buyNote ? '<div class="hint" role="status" style="margin:-4px 0 10px">' + esc(buyNote) + '</div>' : '');
+  if (!b.length) return out + '<div class="empty">Nothing in the GAMES TO BUY column.</div>';
+  out += '<label class="search"><input id="bq" type="search" placeholder="Search the list" aria-label="Search the list" value="' + esc(bq) + '"></label><div id="blist"></div>';
+  return out;
+}
+function buyList() {
+  var q = bq.toLowerCase(), out = '';
+  var okImg = function (u) { return /^https:\/\/[a-z0-9.-]+\.steamstatic\.com\/[A-Za-z0-9\/._?=&%-]+$/.test(u || ''); };
+  data.buy.filter(function (g) { return !q || g.n.toLowerCase().indexOf(q) !== -1; }).forEach(function (g) {
+    var url = g.url || storeUrl(g.appid), sub = g.note || (url ? 'Linked to the store' : 'No store link yet');
+    var bg = okImg(g.banner) ? ' style="background-image:linear-gradient(rgba(0,0,0,.2),rgba(0,0,0,.8)),url(\'' + g.banner + '\')"' : '';
+    var inner = '<div class="in"' + bg + '><div style="font-weight:700;font-size:16px">' + esc(g.n) + '</div><div class="sm">' + esc(sub) + (g.appid ? ' - ' + esc(g.appid) : '') + '</div></div>';
+    out += url ? '<a class="bnr" href="' + esc(url) + '" target="_blank" rel="noopener">' + inner + '</a>' : '<div class="bnr">' + inner + '</div>';
+  });
+  el('blist').innerHTML = out || '<div class="empty">No games match.</div>';
+}
+function addBuy() {
+  var v = (el('addname') && el('addname').value || '').trim();
+  if (!v) { buyNote = 'Type a game name first.'; render(); return; }
+  buyNote = 'Adding...'; render();
+  google.script.run.withSuccessHandler(function (r) { buyNote = 'Added ' + r.name + (r.linked ? '.' : '. Run Tools > Link GAMES TO BUY in the sheet to attach its store link.'); load(); })
+    .withFailureHandler(function (e) { buyNote = (e && e.message) || String(e); render(); }).mobileAddBuy(v);
+}
+
+function viewOpts() {
+  var out = header('Options', 'Looks and full screen', false);
+  var keys = ['dark', 'black', 'light', 'midnight', 'forest', 'mocha', 'paper', 'custom', 'auto'];
+  var themes = keys.map(function (k) { return '<button class="chip' + (prefs.theme === k ? ' on' : '') + '" data-theme="' + k + '">' + (k === 'auto' ? 'Match phone' : k === 'custom' ? 'Custom' : THEMES[k].name) + '</button>'; }).join('');
+  out += '<div class="card"><p class="optlabel">Theme</p><div class="chips">' + themes + '</div></div>';
+  var cu = cleanCustom(prefs.custom);
+  var pick = function (id, label, v) { return '<label class="cpick"><input type="color" data-cc="' + id + '" value="' + v + '" aria-label="' + label + ' colour"><span>' + label + '</span></label>'; };
+  out += '<div class="card"><p class="optlabel">Your own theme</p><div class="swrow">' + pick('bg', 'Background', cu.bg) + pick('card', 'Cards', cu.card) + pick('text', 'Text', cu.text) + '</div><div class="hint">Changing a colour switches to Custom. Lines and muted text are worked out for you, and text is kept readable.</div></div>';
+  var sw = ACCENTS.map(function (a) { return '<button class="sw' + (prefs.accent.toLowerCase() === a[1] ? ' on' : '') + '" style="background:' + a[1] + '" data-accent="' + a[1] + '" aria-label="' + a[0] + '" aria-pressed="' + (prefs.accent.toLowerCase() === a[1]) + '"></button>'; }).join('');
+  out += '<div class="card"><p class="optlabel">Accent colour</p><div class="swrow">' + sw + '<input type="color" id="custom" value="' + esc(validHex(prefs.accent) ? prefs.accent : '#4cc9b0') + '" aria-label="Custom accent colour"></div></div>';
+  out += '<div class="card"><p class="optlabel">Full screen</p>' +
+    (isApp() ? '<div class="sm">This page is open as an app, so there is no address bar.</div>' :
+      '<button class="btn ghost" id="full">Hide the address bar</button><div class="hint">If it does not hide, open the browser menu and choose Add to Home screen, then open the page from the new icon. After a new version of the script, add it again.</div>') +
+    '<div class="hint">These settings are yours alone: other people with the link keep their own.</div>' + (optNote ? '<div class="hint" role="status">' + esc(optNote) + '</div>' : '') + '</div>';
+  out += '<div class="card"><p class="optlabel">Community</p><div style="display:flex;flex-direction:column;gap:10px">' +
+    '<a class="btn ghost" style="display:flex;align-items:center;justify-content:center" href="https://discord.gg/QtcdmVR6f5" target="_blank" rel="noopener">Join the Discord server</a>' +
+    '<a class="btn ghost" style="display:flex;align-items:center;justify-content:center" href="https://www.patreon.com/cw/SwiftPawn35" target="_blank" rel="noopener">Support on Patreon</a></div></div>';
+  out += '<button class="btn ghost" id="reset">Reset to defaults</button>';
+  return out;
+}
+
+function viewDetail() {
+  var d = detail, out = '<button class="back" id="back">&#8249; Back</button>';
+  if (!d.loaded) return out + (d.error ? '<div class="err">' + esc(d.error) + '</div>' : '<div class="empty">Loading...</div>');
+  var g = d.info;
+  var okImg = function (u) { return /^https:\/\/(?:[a-z0-9.-]+\.steamstatic\.com|media\.retroachievements\.org)\/[A-Za-z0-9\/._?=&%-]+$/.test(u || ''); };
+  var bn = okImg(g.banner) ? ' style="background-image:linear-gradient(rgba(0,0,0,.25),rgba(0,0,0,.78)),url(\'' + g.banner + '\');background-size:cover;background-position:center;min-height:130px"' : '';
+  var ic = okImg(g.icon) ? '<img class="gicon" src="' + g.icon + '" alt="" width="56" height="56">' : '';
+  out += '<div class="hero"' + bn + '>' + ic + '<div><div style="font-size:22px;font-weight:700">' + esc(g.name) + '</div><div class="sm" style="color:#c5d1dc">' + esc(g.sub) + '</div></div></div>';
+  out += '<div class="row" style="justify-content:space-between;margin-bottom:6px"><b>' + g.c + ' / ' + g.t + ' achievements</b><b style="color:var(--acc)">' + pct(g.c, g.t).toFixed(1) + '%</b></div><div class="row" style="margin-bottom:12px"><div class="bar" style="height:8px"><i style="width:' + pct(g.c, g.t) + '%;background:var(--acc)"></i></div></div>';
+  if (d.tabKey === 'steam') out += '<div class="chips">' + ['BACKLOG', 'ACTIVE', 'IDLE', 'COMPLETED'].map(function (x) { return '<button class="chip' + (g.status === x ? ' on' : '') + '" data-setst="' + x + '">' + x.charAt(0) + x.slice(1).toLowerCase() + '</button>'; }).join('') + '</div>';
+  else if (g.status) out += '<div style="margin-bottom:12px"><span class="pill ' + esc(g.status) + '">' + esc(g.status) + '</span></div>';
+  out += '<div class="card"><p class="optlabel">My note</p><textarea id="mynote" rows="3" maxlength="500" aria-label="My note about this game">' + esc(g.mine) + '</textarea><button class="btn" id="savenote">Save note</button>' + (d.msg ? '<div class="hint" role="status">' + esc(d.msg) + '</div>' : '') + '</div>';
+  if (g.items.length) {
+    out += '<div class="row" style="justify-content:space-between;margin-top:8px"><b>Still to unlock (' + g.items.length + (g.more ? '+' : '') + ')</b><span class="sm">' + (g.easy ? 'Easiest first' : '') + '</span></div>';
+    g.items.forEach(function (a) { out += '<div class="ach"><div style="flex:1"><div style="font-weight:600">' + esc(a.n) + '</div>' + (a.d ? '<div class="sm" style="font-size:13px;margin-top:2px">' + esc(a.d) + '</div>' : '') + '</div>' + (a.p ? '<div class="p">' + esc(a.p) + '</div>' : '') + '</div>'; });
+    if (g.more) out += '<div class="sm" style="padding:10px 0">' + esc(g.more) + '</div>';
+  } else out += '<div class="empty">' + (g.c >= g.t && g.t > 0 ? 'Every achievement unlocked.' : 'No missing-achievement list for this game yet.') + '</div>';
+  if (g.store) out += '<p><a class="btn ghost" style="display:flex;align-items:center;justify-content:center" href="' + esc(g.store) + '" target="_blank" rel="noopener">Open store page</a></p>';
+  return out;
+}
+
+function render() {
+  if (!data && tab !== 'opts') { el('app').innerHTML = (err ? '<div class="err">' + esc(err) + '</div>' : '<div class="empty">Loading...</div>'); return; }
+  var html = detail ? viewDetail() : sub === 'quick' ? viewQuick() : tab === 'games' ? viewGames() : tab === 'retro' ? viewRetro() : tab === 'buy' ? viewBuy() : tab === 'opts' ? viewOpts() : viewOver();
+  el('app').innerHTML = html;
+  if (!detail && !sub && tab === 'games') gamesList();
+  if (!detail && !sub && tab === 'retro' && data.retro) retroList();
+  if (!detail && !sub && tab === 'buy' && data.buy.length) buyList();
+  var nav = '';
+  ['over', 'games', 'retro', 'buy', 'opts'].forEach(function (t) {
+    nav += '<button class="' + (t === tab && !detail && !sub ? 'on' : '') + '" data-tab="' + t + '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + ICONS[t] + '"/></svg><span>' + LABELS[t] + '</span></button>';
+  });
+  el('nav').innerHTML = nav;
+}
+
+function setStatus(st) {
+  var d = detail; if (!d || !d.loaded) return;
+  d.msg = 'Saving...'; render();
+  google.script.run.withSuccessHandler(function (v) {
+    d.info.status = v; d.msg = 'Status saved.';
+    if (data && data.steam) data.steam.games.forEach(function (x) { if (x.r === d.row) x.s = v; });
+    saveCache(data); render();
+  }).withFailureHandler(function (e) { d.msg = (e && e.message) || String(e); render(); }).mobileSetStatus(d.tabKey, d.row, st);
+}
+function saveNote() {
+  var d = detail; if (!d || !d.loaded) return;
+  var v = el('mynote') ? el('mynote').value : '';
+  d.msg = 'Saving...'; render();
+  google.script.run.withSuccessHandler(function (t) { d.info.mine = t; d.msg = t ? 'Note saved.' : 'Note cleared.'; render(); })
+    .withFailureHandler(function (e) { d.msg = (e && e.message) || String(e); render(); }).mobileSetNote(d.tabKey, d.row, v);
+}
+function openDetail(key) {
+  var p = key.split(':');
+  detail = { loaded: false }; render(); window.scrollTo(0, 0);
+  google.script.run.withSuccessHandler(function (info) { detail = { loaded: true, info: info, tabKey: p[0], row: Number(p[1]) }; render(); })
+    .withFailureHandler(function (e) { detail = { loaded: false, error: (e && e.message) || String(e) }; render(); }).mobileGame(p[0], Number(p[1]));
+}
+
+document.addEventListener('click', function (e) {
+  var t = e.target;
+  var IDS = { full: 1, reset: 1, upd: 1, sort: 1, back: 1, rsort: 1, quickbtn: 1, savenote: 1, addbuy: 1 };
+  while (t && t !== document && !(t.dataset && (t.dataset.tab || t.dataset.open || t.dataset.filter || t.dataset.hc !== undefined || t.dataset.theme || t.dataset.accent || t.dataset.setst || t.dataset.range !== undefined || IDS[t.id]))) t = t.parentNode;
+  if (!t || t === document) return;
+  if (t.dataset.tab) go(t.dataset.tab);
+  else if (t.dataset.open) openDetail(t.dataset.open);
+  else if (t.dataset.filter) { filter = t.dataset.filter; render(); }
+  else if (t.dataset.hc !== undefined) { retroHc = t.dataset.hc === '1'; render(); }
+  else if (t.dataset.theme) setPrefs({ theme: t.dataset.theme });
+  else if (t.dataset.accent) setPrefs({ accent: t.dataset.accent });
+  else if (t.id === 'full') goFull();
+  else if (t.id === 'reset') setPrefs({ theme: 'dark', accent: '#4cc9b0', custom: cleanCustom(null) });
+  else if (t.id === 'upd') update();
+  else if (t.id === 'sort') { sortIx = (sortIx + 1) % SORTS.length; render(); }
+  else if (t.id === 'back') { if (detail) detail = null; else sub = null; render(); }
+  else if (t.id === 'rsort') { rsortIx = (rsortIx + 1) % RSORTS.length; render(); }
+  else if (t.id === 'quickbtn') openQuick();
+  else if (t.id === 'savenote') saveNote();
+  else if (t.id === 'addbuy') addBuy();
+  else if (t.dataset.setst) setStatus(t.dataset.setst);
+  else if (t.dataset.range !== undefined) { histRange = Number(t.dataset.range); render(); }
+});
+document.addEventListener('input', function (e) {
+  if (e.target.id === 'q') { query = e.target.value; gamesList(); }
+  else if (e.target.id === 'rq') { rq = e.target.value; retroList(); }
+  else if (e.target.id === 'bq') { bq = e.target.value; buyList(); }
+});
+document.addEventListener('change', function (e) {
+  if (e.target.dataset && e.target.dataset.cc && validHex(e.target.value)) { var c = cleanCustom(prefs.custom); c[e.target.dataset.cc] = e.target.value.toLowerCase(); setPrefs({ theme: 'custom', custom: c }); return; }
+  if (e.target.id === 'custom' && validHex(e.target.value)) setPrefs({ accent: e.target.value }); });
+if (window.matchMedia) { try { window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', function () { if (prefs.theme === 'auto') { applyPrefs(); render(); } }); } catch (e) { /* older browser */ } }
+loadLocal(); loadCache(); applyPrefs(); render(); load();
+</script>
+</body>
+</html>
+`;
